@@ -1,0 +1,34 @@
+{
+  "events": [
+    {
+      "title": "Discovery call \u2014 Rowan Property",
+      "start": "2026-08-25T01:00",
+      "minutes": 30
+    },
+    {
+      "title": "Standup",
+      "start": "2026-08-25T03:00",
+      "minutes": 15
+    },
+    {
+      "title": "Handover \u2014 Halstead Dental",
+      "start": "2026-08-25T05:00",
+      "minutes": 45
+    },
+    {
+      "title": "Invoicing run",
+      "start": "2026-08-25T07:00",
+      "minutes": 30
+    }
+  ],
+  "slipped": [
+    {
+      "title": "Send Pemberton Legal proposal",
+      "due": "2026-08-21"
+    },
+    {
+      "title": "Chase invoice 2404",
+      "due": "2026-08-23"
+    }
+  ]
+}

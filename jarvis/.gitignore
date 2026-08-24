@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+
+# Your real life never gets committed.
+data/inbox.live.json
+data/calendar.live.json
+memory/*.md
+!memory/.gitkeep

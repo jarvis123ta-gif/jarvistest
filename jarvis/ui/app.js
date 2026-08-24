@@ -1,0 +1,593 @@
+/* app.js — wiring: state, voice, cards.
+ *
+ * Speech never touches the browser's Web Speech API. Audio is captured
+ * with MediaRecorder and transcribed server-side, which works in every
+ * browser instead of only Chrome, and fails loudly instead of silently.
+ */
+
+'use strict';
+
+/* ---- tuning: the numbers worth touching ------------------------- */
+const SILENCE_MS      = 900;    // quiet for this long ends the turn
+const LEVEL_THRESHOLD = 0.055;  // RMS above this counts as speech
+const LEVEL_TICK_MS   = 60;     // setInterval, NOT rAF — see below
+const MIN_SPEECH_MS   = 350;    // ignore a cough
+
+/* rAF is throttled to nothing in a backgrounded tab, which would leave
+   the mic silently deaf mid-sentence. setInterval keeps running. */
+
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+
+const S = {
+  session: 'web-' + Math.random().toString(36).slice(2, 9),
+  state: 'idle',            // idle | listening | thinking | speaking
+  micOn: false, muted: false,
+  stream: null, ctx: null, analyser: null, buf: null,
+  recorder: null, chunks: [], levelTimer: null,
+  lastVoice: 0, speechStart: 0, heardSpeech: false,
+  audio: null, level: 0, status: null,
+};
+
+/* ================================================================ state */
+
+function setState(s) {
+  S.state = s;
+  $('#reactorState').textContent = s;
+  $('#bars').classList.toggle('live', s === 'listening');
+  $('#micBtn').classList.toggle('on', S.micOn);
+}
+
+function alertLoud(msg, kind) {
+  const el = document.createElement('div');
+  el.className = 'alert' + (kind === 'warn' ? ' warn' : '');
+  el.textContent = msg;
+  $('#alerts').appendChild(el);
+  return el;
+}
+
+function caption(t) { $('#caption').textContent = t || ''; }
+
+/* ================================================================ boot */
+
+async function boot() {
+  Graph.init($('#graph'), {
+    onFocus: openNote,
+    onPath: tracePath,
+  });
+
+  await loadStatus();
+  await loadGraph();
+  wire();
+  rotateExample();
+  drawReactor();
+}
+
+async function loadStatus() {
+  try {
+    S.status = await (await fetch('/api/status')).json();
+  } catch (e) {
+    alertLoud('Server unreachable — nothing will work until it is back.');
+    return;
+  }
+  const st = S.status;
+  const badge = $('#modeBadge');
+  badge.textContent = st.mode;
+  badge.classList.toggle('live', st.mode === 'live');
+
+  $('#alerts').innerHTML = '';
+  if (!st.model.ok) {
+    alertLoud('No model: ' + st.model.reason, 'warn');
+  }
+  if (!st.voice.ok) {
+    alertLoud('Voice off (' + st.voice.provider + '): ' + st.voice.reason, 'warn');
+  }
+  if (st.roots.missing.length) {
+    alertLoud('Folder not found: ' + st.roots.missing.join(', '));
+  }
+  if (!st.roots.configured) {
+    alertLoud('No folders configured — set REAL_ROOTS in agent/data.py');
+  }
+}
+
+async function loadGraph() {
+  const g = await (await fetch('/api/graph')).json();
+  Graph.load(g);
+  renderHubs(g.hubs);
+  renderFilter(g.counts);
+}
+
+/* ================================================================ panels */
+
+function renderHubs(hubs) {
+  $('#hubs').innerHTML = hubs.map(h =>
+    `<li data-id="${h.id}">
+       <span class="dot" style="background:${Graph.colourOf(h.type)}"></span>
+       <span class="name">${esc(h.title)}</span>
+       <span class="num">${h.degree}</span>
+     </li>`).join('');
+  $$('#hubs li').forEach(li =>
+    li.onclick = () => Graph.focusById(li.dataset.id));
+}
+
+function renderFilter(counts) {
+  $('#filter').innerHTML = Object.entries(counts).map(([t, c]) =>
+    `<li data-type="${t}">
+       <span class="dot" style="background:${Graph.colourOf(t)}"></span>
+       <span class="name">${esc(t)}</span>
+       <span class="num">${c}</span>
+     </li>`).join('');
+  $$('#filter li').forEach(li => li.onclick = () => {
+    const on = Graph.toggleType(li.dataset.type);
+    li.classList.toggle('off', !on);
+  });
+}
+
+async function openNote(id) {
+  const n = await (await fetch('/api/note?id=' + encodeURIComponent(id))).json();
+  if (n.error) return;
+  const meta = Object.entries(n.meta || {})
+    .filter(([k]) => k !== 'title')
+    .map(([k, v]) => `<div class="crow"><span class="k">${esc(k)}</span>
+                      <span class="v">${esc(String(v))}</span></div>`).join('');
+  const links = (n.links || []).concat(n.backlinks || [])
+    .slice(0, 14)
+    .map(l => `<span class="chip" data-id="${l.id}">${esc(l.title)}</span>`).join('');
+
+  $('#inspector').classList.remove('hint');
+  $('#inspector').innerHTML =
+    `<div class="title">${esc(n.title)}</div>
+     <div class="sub">${esc(n.type)} · ${n.degree} links · ${n.words} words · ${esc(n.file)}</div>
+     ${meta}
+     ${n.unreadable ? '<div class="flag">This PDF has no extractable text. Nothing was guessed from it.</div>' : ''}
+     <div class="body">${esc((n.text || '').slice(0, 1400))}</div>
+     <div class="chips">${links}</div>`;
+  $$('#inspector .chip').forEach(c =>
+    c.onclick = () => Graph.focusById(c.dataset.id));
+}
+
+async function tracePath(a, b) {
+  const r = await (await fetch(`/api/path?a=${a}&b=${b}`)).json();
+  if (!r.path || !r.path.length) {
+    caption('No path between those two.');
+    setTimeout(() => caption(''), 2200);
+    return;
+  }
+  Graph.highlight(r.path);
+  caption(`${r.path.length} steps between them.`);
+  setTimeout(() => caption(''), 3000);
+}
+
+/* ================================================================ ask */
+
+async function ask(text) {
+  text = (text || '').trim();
+  if (!text) return;
+  $('#ask').value = '';
+  caption('');
+  $('#spoken').classList.remove('hint');
+  $('#spoken').textContent = '…';
+  $('#card').innerHTML = '';
+  setState('thinking');
+
+  let r;
+  try {
+    r = await (await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, session: S.session }),
+    })).json();
+  } catch (e) {
+    $('#spoken').textContent = 'The server did not answer.';
+    setState('idle');
+    return;
+  }
+
+  $('#spoken').textContent = r.spoken || '(nothing said)';
+  const cards = r.cards && r.cards.length ? r.cards : (r.card ? [r.card] : []);
+  $('#card').innerHTML = cards.map(renderCard).join('') +
+    (r.badge ? `<div class="flag">${esc(r.badge)}${
+      r.routed_by ? ' · ' + esc(r.routed_by) : ''}</div>` : '');
+  $$('#card .file').forEach(f => f.onclick = () => {
+    if (f.dataset.id) Graph.focusById(f.dataset.id);
+  });
+
+  await speak(r.spoken);
+}
+
+/* ================================================================ cards */
+
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const row = (k, v) => `<div class="crow"><span class="k">${esc(k)}</span>
+                       <span class="v">${v}</span></div>`;
+
+function renderCard(c) {
+  if (!c) return '';
+  switch (c.kind) {
+    case 'search':   return cardSearch(c);
+    case 'research': return cardResearch(c);
+    case 'inbox':    return cardInbox(c);
+    case 'brief':    return cardBrief(c);
+    case 'plan':     return cardPlan(c);
+    case 'memory':   return cardMemory(c);
+    case 'memories': return cardMemories(c);
+    case 'error':    return `<div class="flag">${esc(c.error)}</div>`;
+    default:         return '';
+  }
+}
+
+function cardSearch(c) {
+  if (c.empty) return row('searched', `${c.searched} notes, nothing matched`);
+  const hits = c.hits.map(h => row(h.type,
+    `<em class="file" data-id="${h.id}">${esc(h.file)}</em><br>
+     <span class="muted">${esc(h.snippet)}</span>
+     ${h.amounts && h.amounts.length ? `<br><span class="muted">${esc(h.amounts.join('  '))}</span>` : ''}
+     ${h.status ? `<br><span class="muted">status: ${esc(h.status)}</span>` : ''}`)).join('');
+  const mem = (c.memory || []).map(m =>
+    row('memory', `<em>${esc(m.fact)}</em><br><span class="muted">${esc(m.file)}</span>`)).join('');
+  const warn = (c.warnings || []).map(w =>
+    `<div class="flag">In ${esc(w.where)}: “${esc(w.quote)}” — ${esc(w.handling)}</div>`).join('');
+  return hits + mem + warn;
+}
+
+function cardResearch(c) {
+  const web = (c.results || []).map(r =>
+    row('web', `<em>${esc(r.title)}</em><br><span class="muted">${esc(r.snippet)}</span>`)).join('');
+  const yours = (c.your_numbers || []).map(y =>
+    row('yours', `<em>${esc(y.amounts.join('  '))}</em> — ${esc(y.title)}
+                  <br><span class="muted">${esc(y.file)}${y.status ? ' · ' + esc(y.status) : ''}</span>`)).join('');
+  return (c.error ? `<div class="flag">${esc(c.error)}</div>` : '') +
+         yours + web + `<div class="qual">${esc(c.note)}</div>`;
+}
+
+function cardInbox(c) {
+  if (c.error) return `<div class="flag">${esc(c.error)}<br>${esc(c.hint || '')}</div>`;
+  const msgs = c.messages.map(m => row(
+    m.unread ? 'unread' : 'read',
+    `<em>${esc(m.from)}</em> — ${esc(m.subject)}
+     <br><span class="muted">${esc(m.body.slice(0, 120))}</span>
+     <br><span class="muted">${m.in_your_files
+        ? 'in your files: ' + m.matched.map(x => esc(x.file)).join(', ')
+        : 'no record of them'}</span>`)).join('');
+  const flags = (c.flags || []).map(f =>
+    `<div class="flag">${esc(f.where)}: “${esc(f.quote)}” — ${esc(f.handling)}</div>`).join('');
+  return msgs + flags + `<div class="qual">${esc(c.note)}</div>`;
+}
+
+function cardBrief(c) {
+  const ev = (c.events || []).map(e =>
+    row('diary', `<em>${esc(e.title)}</em> <span class="muted">${esc(e.start.slice(11))} · ${e.minutes}m</span>`)).join('');
+  const sl = (c.slipped || []).map(s =>
+    row('slipped', `${esc(s.title)} <span class="muted">due ${esc(s.due)}</span>`)).join('');
+  const un = (c.unread || []).slice(0, 5).map(u =>
+    row('unread', `<em>${esc(u.from)}</em> — ${esc(u.subject)}`)).join('');
+  const inv = (c.unpaid || []).map(i =>
+    row('owed', `<em>${esc(i.amount)}</em> ${esc(i.client || '')}
+                 <br><span class="muted">${esc(i.status)} · ${esc(i.file)}</span>`)).join('');
+  const t = c.unpaid_total || {};
+  return ev + sl + un + inv +
+    row('outstanding', `<em>${t.outstanding}</em> across ${t.count}`) +
+    `<div class="qual">${esc(t.qualifier || '')} ${esc(c.caveat || '')}</div>`;
+}
+
+function cardPlan(c) {
+  const it = (c.items || []).map(i =>
+    row(String(i.rank), `<em>${esc(i.what)}</em><br><span class="muted">${esc(i.why)}</span>
+      ${i.qualifier ? `<br><span class="muted">${esc(i.qualifier)}</span>` : ''}`)).join('');
+  return it + `<div class="qual">${esc(c.considered)} candidates, ${esc(c.ordering)}. ${esc(c.note)}</div>`;
+}
+
+function cardMemory(c) {
+  if (c.error) return `<div class="flag">${esc(c.error)}</div>`;
+  return row('written', `<em>${esc(c.fact)}</em>`) +
+         row('file', esc(c.file)) + row('total', esc(c.total)) +
+         `<div class="qual">${esc(c.note)}</div>`;
+}
+
+function cardMemories(c) {
+  if (!c.facts.length) return row('memory', 'nothing remembered yet');
+  return c.facts.map(f =>
+    row(f.date.slice(0, 10), `<em>${esc(f.fact)}</em><br><span class="muted">${esc(f.file)}</span>`)).join('');
+}
+
+/* ================================================================ voice out */
+
+async function speak(text) {
+  if (!text) { setState('idle'); return resumeListening(); }
+  if (S.muted || !(S.status && S.status.voice.ok)) {
+    setState('idle');
+    return resumeListening();
+  }
+  setState('speaking');
+  stopRecording();                 // deaf while speaking — no self-transcription
+
+  try {
+    const res = await fetch('/api/speak', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      alertLoud('Could not speak: ' + (e.error || res.status), 'warn');
+      setState('idle');
+      return resumeListening();
+    }
+    const url = URL.createObjectURL(await res.blob());
+    await new Promise(done => {
+      S.audio = new Audio(url);
+      S.audio.onended = S.audio.onerror = () => {
+        URL.revokeObjectURL(url); S.audio = null; done();
+      };
+      S.audio.play().catch(() => done());
+    });
+  } catch (e) {
+    alertLoud('Speech failed: ' + e.message, 'warn');
+  }
+  setState('idle');
+  resumeListening();
+}
+
+function bargeIn() {
+  if (S.audio) { S.audio.pause(); S.audio = null; }
+  setState('idle');
+}
+
+/* ================================================================ voice in */
+
+async function micToggle() {
+  if (S.state === 'speaking') { bargeIn(); }
+  if (S.micOn) { micOff(); return; }
+  if (!(S.status && S.status.voice.ok)) {
+    alertLoud('Mic is pointless right now: ' + S.status.voice.reason, 'warn');
+    return;
+  }
+  try {
+    S.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (e) {
+    /* A blocked mic that produces no error is the most confusing failure
+       in this whole build, so say it plainly. */
+    alertLoud('Microphone blocked or unavailable: ' + e.name +
+              '. Check the padlock in the address bar.');
+    return;
+  }
+  S.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = S.ctx.createMediaStreamSource(S.stream);
+  S.analyser = S.ctx.createAnalyser();
+  S.analyser.fftSize = 1024;
+  S.buf = new Uint8Array(S.analyser.fftSize);
+  src.connect(S.analyser);
+
+  S.micOn = true;
+  S.levelTimer = setInterval(levelTick, LEVEL_TICK_MS);
+  startRecording();
+}
+
+function micOff() {
+  S.micOn = false;
+  stopRecording();
+  clearInterval(S.levelTimer); S.levelTimer = null;
+  if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+  if (S.ctx) S.ctx.close();
+  S.stream = S.ctx = S.analyser = null;
+  S.level = 0; paintBars(0);
+  caption('');
+  setState('idle');
+}
+
+function startRecording() {
+  if (!S.micOn || !S.stream || S.recorder) return;
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
+  S.chunks = [];
+  S.recorder = new MediaRecorder(S.stream, mime ? { mimeType: mime } : undefined);
+  S.recorder.ondataavailable = e => e.data.size && S.chunks.push(e.data);
+  S.recorder.onstop = onTurnEnd;
+  S.recorder.start(200);
+  S.heardSpeech = false;
+  S.speechStart = 0;
+  S.lastVoice = performance.now();
+  setState('listening');
+  caption('listening…');
+}
+
+function stopRecording() {
+  if (S.recorder && S.recorder.state !== 'inactive') {
+    S.recorder.onstop = null;          // discard, do not transcribe
+    try { S.recorder.stop(); } catch (e) { /* already gone */ }
+  }
+  S.recorder = null;
+}
+
+function resumeListening() {
+  if (S.micOn && !S.recorder) setTimeout(startRecording, 220);
+}
+
+function levelTick() {
+  if (!S.analyser) return;
+  S.analyser.getByteTimeDomainData(S.buf);
+  let sum = 0;
+  for (let i = 0; i < S.buf.length; i++) {
+    const v = (S.buf[i] - 128) / 128;
+    sum += v * v;
+  }
+  S.level = Math.sqrt(sum / S.buf.length);
+  paintBars(S.level);
+
+  if (S.state !== 'listening' || !S.recorder) return;
+  const now = performance.now();
+  if (S.level > LEVEL_THRESHOLD) {
+    S.lastVoice = now;
+    if (!S.heardSpeech) { S.heardSpeech = true; S.speechStart = now; caption('…'); }
+  } else if (S.heardSpeech &&
+             now - S.lastVoice > SILENCE_MS &&
+             now - S.speechStart > MIN_SPEECH_MS) {
+    endTurn();
+  }
+}
+
+function endTurn() {
+  if (!S.recorder) return;
+  caption('transcribing…');
+  setState('thinking');
+  try { S.recorder.stop(); } catch (e) { /* nothing to stop */ }
+}
+
+async function onTurnEnd() {
+  const blob = new Blob(S.chunks, { type: S.chunks[0] ? S.chunks[0].type : 'audio/webm' });
+  S.recorder = null;
+  if (blob.size < 1200) { caption(''); resumeListening(); return; }
+
+  let out;
+  try {
+    const res = await fetch('/api/listen', {
+      method: 'POST',
+      headers: { 'content-type': blob.type || 'audio/webm' },
+      body: blob,
+    });
+    out = await res.json();
+  } catch (e) {
+    alertLoud('Transcriber unreachable: ' + e.message);
+    caption(''); resumeListening(); return;
+  }
+  if (!out.ok) {
+    alertLoud('Could not transcribe: ' + out.error);
+    caption(''); resumeListening(); return;
+  }
+  const text = (out.text || '').trim();
+  caption(text || '(nothing heard)');
+  if (!text) { resumeListening(); return; }
+  await ask(text);
+}
+
+function paintBars(level) {
+  const bars = $$('#bars i');
+  const n = bars.length;
+  for (let i = 0; i < n; i++) {
+    const centre = 1 - Math.abs(i - (n - 1) / 2) / ((n - 1) / 2);
+    const h = 2 + Math.min(1, level * 7) * (3 + centre * 13);
+    bars[i].style.height = h.toFixed(1) + 'px';
+  }
+}
+
+/* ================================================================ reactor */
+
+function drawReactor() {
+  const cv = $('#reactor'), g = cv.getContext('2d');
+  const cx = 66, cy = 66;
+  let t = 0;
+
+  const COL = { idle: '#4a5765', listening: '#35d0ff',
+                thinking: '#f2b53a', speaking: '#3ecf7a' };
+
+  setInterval(() => {
+    t += 0.04;
+    const col = COL[S.state] || COL.idle;
+    const amp = S.state === 'listening' ? Math.min(1, S.level * 8)
+              : S.state === 'speaking' ? 0.55 + Math.sin(t * 5) * 0.3
+              : S.state === 'thinking' ? 0.4 : 0.12;
+
+    g.clearRect(0, 0, 132, 132);
+
+    g.strokeStyle = 'rgba(255,255,255,.055)';
+    g.lineWidth = 1;
+    [26, 38, 50].forEach(r => {
+      g.beginPath(); g.arc(cx, cy, r, 0, 7); g.stroke();
+    });
+
+    // tick ring
+    g.strokeStyle = 'rgba(255,255,255,.10)';
+    for (let i = 0; i < 60; i++) {
+      const a = (i / 60) * Math.PI * 2;
+      const r0 = 54, r1 = 54 + (i % 5 === 0 ? 5 : 2.5);
+      g.beginPath();
+      g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
+      g.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+      g.stroke();
+    }
+
+    // live arcs
+    g.strokeStyle = col; g.lineWidth = 2;
+    g.globalAlpha = 0.9;
+    g.beginPath(); g.arc(cx, cy, 44, t, t + 1.1 + amp * 1.4); g.stroke();
+    g.beginPath(); g.arc(cx, cy, 33, -t * 1.6, -t * 1.6 + 0.7 + amp); g.stroke();
+    g.globalAlpha = 0.35;
+    g.beginPath(); g.arc(cx, cy, 55, t * 0.5, t * 0.5 + 2.2); g.stroke();
+
+    // core
+    g.globalAlpha = 1;
+    g.fillStyle = col;
+    g.beginPath(); g.arc(cx, cy, 5 + amp * 9, 0, 7); g.fill();
+    g.globalAlpha = 0.16;
+    g.beginPath(); g.arc(cx, cy, 12 + amp * 16, 0, 7); g.fill();
+    g.globalAlpha = 1;
+  }, 55);
+}
+
+/* ================================================================ wiring */
+
+const EXAMPLES = [
+  'what did we agree with Rowan Property?',
+  'brief me',
+  'why is that invoice only half paid?',
+  'plan my day',
+  'who wrote this week that I already know?',
+  'remember that I do not take work under two thousand',
+  'what is the going rate for a retainer like mine?',
+];
+
+function rotateExample() {
+  let i = 0;
+  setInterval(() => {
+    if (document.activeElement === $('#ask') || $('#ask').value) return;
+    i = (i + 1) % EXAMPLES.length;
+    $('#ask').placeholder = EXAMPLES[i];
+  }, 5200);
+}
+
+function wire() {
+  $('#ask').addEventListener('keydown', e => {
+    if (e.key === 'Enter') ask($('#ask').value);
+  });
+  $('#micBtn').onclick = micToggle;
+  $('#muteBtn').onclick = () => {
+    S.muted = !S.muted;
+    $('#muteBtn').classList.toggle('muted', S.muted);
+    $('#muteBtn').textContent = S.muted ? 'Muted' : 'Mute';
+    if (S.muted) bargeIn();
+  };
+  $('#memBtn').onclick = async () => {
+    const m = await (await fetch('/api/memory')).json();
+    $('#spoken').classList.remove('hint');
+    $('#spoken').textContent = `${m.count} facts remembered.`;
+    $('#card').innerHTML = renderCard({ kind: 'memories', facts: m.facts });
+  };
+  $$('[data-say]').forEach(b => b.onclick = () => ask(b.dataset.say));
+
+  $$('#toolbar .pill').forEach(p => p.onclick = () => {
+    const act = p.dataset.act;
+    if (act === 'fit') { Graph.fit(); Graph.kick(); return; }
+    p.classList.toggle('on');
+    const on = p.classList.contains('on');
+    if (act === 'labels') Graph.setLabels(on);
+    if (act === 'pulse') Graph.setPulse(on);
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.target === $('#ask')) return;
+    if (e.code === 'Space') { e.preventDefault(); micToggle(); }
+    if (e.key === 'Escape') {
+      bargeIn(); Graph.clearHighlight();
+      if (S.micOn) micOff();
+    }
+  });
+
+  setInterval(loadStatus, 30000);
+}
+
+boot();

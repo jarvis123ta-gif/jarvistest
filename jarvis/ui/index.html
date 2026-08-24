@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<canvas id="graph"></canvas>
+
+<!-- top left -------------------------------------------------------->
+<div id="brand">
+  <span class="wordmark">JARVIS</span>
+  <span class="badge" id="modeBadge">demo</span>
+</div>
+
+<!-- top centre ------------------------------------------------------>
+<div id="toolbar" class="pillbar">
+  <button class="pill" data-act="fit" title="Fit the graph to the window">Fit</button>
+  <button class="pill on" data-act="labels" title="Labels">Aa</button>
+  <button class="pill on" data-act="pulse" title="Idle pulse">◌</button>
+</div>
+
+<!-- degrade loudly -------------------------------------------------->
+<div id="alerts"></div>
+
+<!-- left ------------------------------------------------------------>
+<aside class="panel left">
+  <section class="block cap">
+    <div class="label">Inspector</div>
+    <div id="inspector" class="hint">
+      Click a node to focus it. Shift-click a second to trace the path.
+    </div>
+  </section>
+  <section class="block grow">
+    <div class="label">Top hubs</div>
+    <ul id="hubs" class="rows"></ul>
+  </section>
+  <div class="footnote">drag to pan · scroll to zoom · shift-click to trace</div>
+</aside>
+
+<!-- right ----------------------------------------------------------->
+<aside class="panel right">
+  <section class="block cap">
+    <div class="label">Filter</div>
+    <ul id="filter" class="rows"></ul>
+  </section>
+
+  <section class="block reactorblock">
+    <canvas id="reactor" width="132" height="132"></canvas>
+    <div id="reactorState">idle</div>
+  </section>
+
+  <section class="block grow" id="responseBlock">
+    <div class="label">Response</div>
+    <div id="spoken" class="spoken hint">Ask me something.</div>
+    <div id="card"></div>
+  </section>
+</aside>
+
+<!-- bottom ---------------------------------------------------------->
+<div id="askbar">
+  <div id="caption" class="caption"></div>
+  <div class="askrow">
+    <div class="bars" id="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <input id="ask" autocomplete="off" spellcheck="false" placeholder="Ask me something">
+    <button class="act mic" id="micBtn" title="Mic — press once, then talk (Space)">Mic</button>
+    <button class="act" id="muteBtn" title="Mute the voice">Mute</button>
+    <button class="act" data-say="brief me">Brief</button>
+    <button class="act" data-say="plan my day">Plan</button>
+    <button class="act" id="memBtn">Memory</button>
+  </div>
+</div>
+
+<script src="graph.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
