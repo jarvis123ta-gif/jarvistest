@@ -29,6 +29,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import connectors               # noqa: E402
 import data                     # noqa: E402
 import memory                   # noqa: E402
 import tools                    # noqa: E402
@@ -56,7 +57,8 @@ USAGE = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 def build_vault() -> Vault:
     global VAULT
     with VAULT_LOCK:
-        VAULT = Vault(data.active_roots(), data.mode_label()).build()
+        VAULT = Vault(data.active_roots(), data.mode_label(),
+                      data.domain_of).build()
     return VAULT
 
 
@@ -132,9 +134,14 @@ OPINION = re.compile(r"^\s*(what do you think|why|how come|do you|should i|"
                      r"what would you|is that|really|and\b|what about)", re.I)
 DIRECT = [
     (re.compile(r"\b(brief me|briefing|catch me up|what.s (going )?on|"
-                r"where (am|are) (i|we))\b", re.I), "brief_me", {}),
+                r"where (am|are) (i|we)|status report)\b", re.I), "brief_me", {}),
     (re.compile(r"\b(plan (my |the )?day|what should i do|priorit|"
-                r"today.s plan)\b", re.I), "plan_day", {}),
+                r"today.s plan|what.s first|attention first)\b", re.I),
+     "plan_day", {}),
+    (re.compile(r"\b(deadline|due|overdue|coming up|what.s due|when is)\b", re.I),
+     "deadlines", {}),
+    (re.compile(r"\b(store|shopify|order|orders|inventory|restock|"
+                r"unfulfilled|sales)\b", re.I), "store_status", {}),
     (re.compile(r"\b(inbox|my mail|email|who (wrote|emailed)|unread)\b", re.I),
      "read_inbox", {}),
     (re.compile(r"\b(remember|note that|don.t forget|keep in mind)\b", re.I),
@@ -144,10 +151,10 @@ DIRECT = [
 ]
 
 SMALL_TALK = {
-    "hear": "Loud and clear.",
-    "hello": "I'm here.",
-    "thanks": "Any time.",
-    "test": "Working.",
+    "hear": "Loud and clear, Sir.",
+    "hello": "Here, Sir.",
+    "thanks": "Any time, Sir.",
+    "test": "Working, Sir.",
 }
 
 
@@ -170,6 +177,9 @@ def fallback_route(text: str, vault: Vault) -> dict:
                 args = {"fact": fact}
             if name == "research_web":
                 args = {"query": t}
+            if name in ("deadlines", "search_brain"):
+                dom = tools.guess_domain(t)
+                args = dict(args, **({"domain": dom} if dom else {}))
             res = tools.dispatch(name, args, vault)
             return {"mode": "tool", "tool": name,
                     "spoken": res["spoken"], "card": res["card"]}
@@ -178,12 +188,12 @@ def fallback_route(text: str, vault: Vault) -> dict:
         for k, v in SMALL_TALK.items():
             if k in t.lower():
                 return {"mode": "conversation", "spoken": v, "card": None}
-        return {"mode": "conversation", "spoken": "I'm here.", "card": None}
+        return {"mode": "conversation", "spoken": "Here, Sir.", "card": None}
 
     if OPINION.match(t) and len(t.split()) <= 8:
         return {"mode": "conversation",
-                "spoken": "Without the model running I can look things up, but "
-                          "I can't give you an opinion.",
+                "spoken": "Without the model running I can look things up, Sir, "
+                          "but I can't give you an opinion.",
                 "card": None}
 
     hits = vault.search(t, limit=5)
@@ -195,8 +205,8 @@ def fallback_route(text: str, vault: Vault) -> dict:
                 "routed_by": f"file score {best:.1f}"}
 
     return {"mode": "conversation",
-            "spoken": "That's a conversation, and conversation needs the model. "
-                      "Set ANTHROPIC_API_KEY and I'll talk properly.",
+            "spoken": "That's a conversation, Sir, and conversation needs the "
+                      "model. Set ANTHROPIC_API_KEY and I'll talk properly.",
             "card": None, "routed_by": f"file score {best:.1f}, below threshold"}
 
 
@@ -206,7 +216,7 @@ def ask(text: str, sid: str) -> dict:
     vault = VAULT or build_vault()
     text = (text or "").strip()
     if not text:
-        return {"spoken": "I didn't catch that.", "card": None,
+        return {"spoken": "I didn't catch that, Sir.", "card": None,
                 "mode": "conversation", "model": have_model()}
 
     if not have_model():
@@ -321,6 +331,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"error": "no such note"}, 404)
                 return self._json({
                     "id": n["id"], "title": n["title"], "type": n["type"],
+                    "domain": n["domain"],
                     "file": n["file"], "rel": n["rel"], "meta": n["meta"],
                     "tags": n["tags"], "degree": n["degree"], "words": n["words"],
                     "mtime": n["mtime"], "unreadable": n["unreadable"],
@@ -355,7 +366,9 @@ class Handler(BaseHTTPRequestHandler):
             "vault": {"notes": len(v.notes) if v else 0,
                       "edges": len(v.edges) if v else 0,
                       "skipped": len(v.skipped) if v else 0,
-                      "types": v.counts_by_type() if v else {}},
+                      "types": v.counts_by_type() if v else {},
+                      "domains": v.counts_by_domain() if v else {}},
+            "connectors": connectors.status_all(),
             "memory": memory.stats(),
         }
 
@@ -420,11 +433,15 @@ def main() -> None:
         print("!! these roots do not exist: " + ", ".join(st["missing"]))
     if not st["configured"]:
         print("!! no roots configured — set REAL_ROOTS in agent/data.py "
-              "or JARVIS_ROOTS")
+              "or JARVIS_SCHOOL_ROOTS / JARVIS_BUSINESS_ROOTS / JARVIS_DECA_ROOTS")
+    for c in connectors.status_all():
+        mark = "ok" if c["connected"] else "NOT CONNECTED"
+        print(f"conn:   {c['label']:<17} {mark}"
+              + (f" — {c['reason']}" if not c["connected"] else f" ({c['mode']})"))
     print(f"model:  {MODEL if have_model() else 'NOT SET — keyword routing, badge shown'}")
     vs = voice.status()
     print(f"voice:  {vs['provider']}" + ("" if vs["ok"] else f" — OFF: {vs['reason']}"))
-    print(f"mode:   {data.mode_label()}")
+    print(f"mode:   {data.mode_label()}   tz: {data.TIMEZONE}")
     print(f"\n  http://localhost:{PORT}\n")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 

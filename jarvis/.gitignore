@@ -6,5 +6,6 @@ __pycache__/
 # Your real life never gets committed.
 data/inbox.live.json
 data/calendar.live.json
+data/*.live.json
 memory/*.md
 !memory/.gitkeep

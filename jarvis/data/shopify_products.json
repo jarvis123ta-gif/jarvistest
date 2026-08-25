@@ -1,0 +1,82 @@
+[
+  {
+    "id": 9000,
+    "title": "Everyday Carry Pouch",
+    "price": "34.00",
+    "cost": "12.50",
+    "sku": "DEMO-EVERYDAY-CAR",
+    "inventory": 24,
+    "status": "active",
+    "demo": true
+  },
+  {
+    "id": 9001,
+    "title": "Minimal Desk Mat",
+    "price": "42.00",
+    "cost": "16.00",
+    "sku": "DEMO-MINIMAL-DESK",
+    "inventory": 10,
+    "status": "active",
+    "demo": true
+  },
+  {
+    "id": 9002,
+    "title": "Cable Organiser Set",
+    "price": "19.00",
+    "cost": "6.40",
+    "sku": "DEMO-CABLE-ORGANI",
+    "inventory": 69,
+    "status": "active",
+    "demo": true
+  },
+  {
+    "id": 9003,
+    "title": "Travel Tech Case",
+    "price": "52.00",
+    "cost": "21.00",
+    "sku": "DEMO-TRAVEL-TECH-",
+    "inventory": 57,
+    "status": "active",
+    "demo": true
+  },
+  {
+    "id": 9004,
+    "title": "Laptop Stand \u2014 Aluminium",
+    "price": "68.00",
+    "cost": "29.50",
+    "sku": "DEMO-LAPTOP-STAND",
+    "inventory": 63,
+    "status": "active",
+    "demo": true
+  },
+  {
+    "id": 9005,
+    "title": "Keycap Set \u2014 Muted",
+    "price": "45.00",
+    "cost": "18.00",
+    "sku": "DEMO-KEYCAP-SET-M",
+    "inventory": 24,
+    "status": "active",
+    "demo": true
+  },
+  {
+    "id": 9006,
+    "title": "Sticker Pack",
+    "price": "9.00",
+    "cost": "2.10",
+    "sku": "DEMO-STICKER-PACK",
+    "inventory": 21,
+    "status": "active",
+    "demo": true
+  },
+  {
+    "id": 9007,
+    "title": "Canvas Tote",
+    "price": "26.00",
+    "cost": "9.80",
+    "sku": "DEMO-CANVAS-TOTE",
+    "inventory": 61,
+    "status": "active",
+    "demo": true
+  }
+]

@@ -1,34 +1,46 @@
 {
   "events": [
     {
-      "title": "Discovery call \u2014 Rowan Property",
-      "start": "2026-08-25T01:00",
-      "minutes": 30
+      "title": "AP Calculus BC \u2014 period 2",
+      "start": "2026-08-24T20:00-05:00",
+      "minutes": 50,
+      "domain": "school"
     },
     {
-      "title": "Standup",
-      "start": "2026-08-25T03:00",
-      "minutes": 15
+      "title": "AP US History \u2014 period 3",
+      "start": "2026-08-24T21:00-05:00",
+      "minutes": 50,
+      "domain": "school"
     },
     {
-      "title": "Handover \u2014 Halstead Dental",
-      "start": "2026-08-25T05:00",
-      "minutes": 45
+      "title": "AP Chemistry \u2014 period 5",
+      "start": "2026-08-24T23:00-05:00",
+      "minutes": 50,
+      "domain": "school"
     },
     {
-      "title": "Invoicing run",
-      "start": "2026-08-25T07:00",
-      "minutes": 30
+      "title": "DECA chapter meeting",
+      "start": "2026-08-25T03:00-05:00",
+      "minutes": 45,
+      "domain": "deca"
+    },
+    {
+      "title": "Store \u2014 weekly numbers",
+      "start": "2026-08-25T05:00-05:00",
+      "minutes": 30,
+      "domain": "business"
     }
   ],
   "slipped": [
     {
-      "title": "Send Pemberton Legal proposal",
-      "due": "2026-08-21"
+      "title": "AP Chemistry \u2014 lab report 3",
+      "due": "2026-08-22",
+      "domain": "school"
     },
     {
-      "title": "Chase invoice 2404",
-      "due": "2026-08-23"
+      "title": "DECA \u2014 written entry upload",
+      "due": "2026-08-23",
+      "domain": "deca"
     }
   ]
 }

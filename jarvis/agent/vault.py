@@ -139,9 +139,13 @@ def tokenize(text: str) -> list[str]:
 class Vault:
     """An in-memory, read-only index of one or more folders."""
 
-    def __init__(self, roots: list[str], label: str = "vault"):
+    def __init__(self, roots: list[str], label: str = "vault",
+                 domain_fn=None):
         self.roots = [os.path.abspath(os.path.expanduser(r)) for r in roots]
         self.label = label
+        # Which world a file belongs to (school / business / deca). Supplied
+        # by the caller so this module stays free of any real-data knowledge.
+        self.domain_fn = domain_fn
         self.notes: dict[str, dict] = {}
         self.edges: list[tuple[str, str]] = []
         self.adjacency: dict[str, set[str]] = defaultdict(set)
@@ -216,6 +220,8 @@ class Vault:
                 "root": root,
                 "title": _title_of(meta, body, full),
                 "type": _type_of(meta, full, root),
+                "domain": (meta.get("domain")
+                           or (self.domain_fn(full) if self.domain_fn else "unsorted")),
                 "meta": meta,
                 "tags": sorted({t.lower() for t in TAG_RE.findall(body)}
                                | {str(t).lower() for t in (meta.get("tags") or [])
@@ -277,10 +283,17 @@ class Vault:
         self._postings = defaultdict(dict)
         lengths: dict[str, int] = {}
         for nid, n in self.notes.items():
-            # title and tags weigh more than body prose
+            # Frontmatter values are searchable too — a teacher's name or a
+            # course code lives there, not in the prose, and "who is Whitfield"
+            # has to find it.
+            metatext = " ".join(
+                str(v) for k, v in (n["meta"] or {}).items()
+                if k not in ("type", "domain") and not isinstance(v, list))
             toks = (tokenize(n["title"]) * 3
                     + tokenize(" ".join(n["tags"])) * 2
+                    + tokenize(metatext) * 2
                     + tokenize(n["type"]) * 2
+                    + tokenize(n["domain"])
                     + tokenize(n["text"]))
             lengths[nid] = max(len(toks), 1)
             counts: dict[str, int] = defaultdict(int)
@@ -315,6 +328,7 @@ class Vault:
             n = self.notes[nid]
             out.append({
                 "id": nid, "title": n["title"], "type": n["type"],
+                "domain": n["domain"],
                 "file": n["file"], "rel": n["rel"], "path": n["path"],
                 "score": round(sc, 3), "degree": n["degree"],
                 "snippet": self._snippet(n["text"], qt),
@@ -348,6 +362,16 @@ class Vault:
         for n in self.notes.values():
             c[n["type"]] += 1
         return dict(sorted(c.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    def counts_by_domain(self) -> dict[str, int]:
+        c: dict[str, int] = defaultdict(int)
+        for n in self.notes.values():
+            c[n["domain"]] += 1
+        return dict(sorted(c.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    def by_type(self, *types: str) -> list[dict]:
+        want = set(types)
+        return [n for n in self.notes.values() if n["type"] in want]
 
     def shortest_path(self, a: str, b: str) -> list[str]:
         """Plain BFS. Returns [] when the two nodes are in different components."""
@@ -385,11 +409,12 @@ class Vault:
             "label": self.label,
             "nodes": [{
                 "id": n["id"], "title": n["title"], "type": n["type"],
-                "degree": n["degree"], "words": n["words"],
-                "mtime": n["mtime"], "file": n["file"],
+                "domain": n["domain"], "degree": n["degree"],
+                "words": n["words"], "mtime": n["mtime"], "file": n["file"],
             } for n in self.notes.values()],
             "edges": [{"s": s, "t": t} for s, t in self.edges],
             "counts": self.counts_by_type(),
+            "domains": self.counts_by_domain(),
             "hubs": self.hubs(8),
             "stats": {
                 "notes": len(self.notes),
@@ -408,8 +433,11 @@ class Vault:
             f"notes: {len(self.notes)}   edges: {len(self.edges)}   "
             f"skipped: {len(self.skipped)}   in {getattr(self, 'build_seconds', 0)}s",
             "",
-            "counts by type",
+            "counts by domain",
         ]
+        for t, c in self.counts_by_domain().items():
+            lines.append(f"  {t:<14} {c:>4}")
+        lines += ["", "counts by type"]
         for t, c in self.counts_by_type().items():
             lines.append(f"  {t:<14} {c:>4}")
         lines += ["", "top 10 hubs"]
@@ -429,6 +457,6 @@ class Vault:
 
 if __name__ == "__main__":
     import sys
-    from data import active_roots, mode_label
-    v = Vault(active_roots(), mode_label()).build()
+    from data import active_roots, mode_label, domain_of
+    v = Vault(active_roots(), mode_label(), domain_of).build()
     print(v.report())

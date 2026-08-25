@@ -26,17 +26,24 @@ const Graph = (() => {
   // graph reads the same way every session. Anything else falls through
   // to the spare palette in order of frequency.
   const BY_TYPE = {
-    call: '#3aa0ff', note: '#d8dee6', concept: '#f2b53a', project: '#5f9dff',
-    person: '#a97bff', client: '#3ecf7a', invoice: '#ff5a5a',
-    proposal: '#ffb03a', sop: '#ff8a3d', brief: '#8ea2b8',
-    campaign: '#ff5fa2', memory: '#2fd6c3',
+    // school
+    assignment: '#3aa0ff', course: '#3ecf7a', test: '#ff5a5a',
+    concept: '#f2b53a', note: '#d8dee6',
+    // business
+    product: '#a97bff', task: '#ff8a3d', sop: '#8ea2b8',
+    // deca
+    event: '#2fd6c3', deadline: '#ff5fa2', prep: '#c6ff5f',
   };
+  // The three worlds, used by the domain filter rows.
+  const DOMAIN_COLOUR = { school: '#3aa0ff', business: '#a97bff',
+                          deca: '#2fd6c3', unsorted: '#8ea2b8' };
+
   const PALETTE = ['#2fd6c3', '#c6ff5f', '#5f7dff', '#ff5fa2', '#9fb0c4',
                    '#ffd166', '#7ee3ff', '#e08cff'];
 
   let cv, ctx, W = 0, H = 0, dpr = 1;
   let nodes = [], edges = [], byId = new Map(), adj = new Map();
-  let colours = new Map(), hidden = new Set();
+  let colours = new Map(), hidden = new Set(), hiddenDomains = new Set();
   let cam = { x: 0, y: 0, k: 1 };
   let alpha = 1, raf = 0;
   let hover = null, focus = null, pathIds = new Set(), pathEdges = new Set();
@@ -175,7 +182,9 @@ const Graph = (() => {
 
   // ---------------------------------------------------------------- draw
 
-  function visible(d) { return !hidden.has(d.type); }
+  function visible(d) {
+    return !hidden.has(d.type) && !hiddenDomains.has(d.domain);
+  }
 
   function frame(ts) {
     step();
@@ -384,6 +393,11 @@ const Graph = (() => {
     },
     clearHighlight() { pathIds = new Set(); pathEdges = new Set(); },
     toggleType(t) { hidden.has(t) ? hidden.delete(t) : hidden.add(t); return !hidden.has(t); },
+    toggleDomain(d) {
+      hiddenDomains.has(d) ? hiddenDomains.delete(d) : hiddenDomains.add(d);
+      return !hiddenDomains.has(d);
+    },
+    domainColour: d => DOMAIN_COLOUR[d] || '#8ea2b8',
     setLabels(v) { showLabels = v; },
     setPulse(v) { showPulse = v; if (!v) pulses = []; },
     focusId: () => (focus ? focus.id : null),

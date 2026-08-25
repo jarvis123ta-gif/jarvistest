@@ -86,7 +86,12 @@ async function loadStatus() {
     alertLoud('Folder not found: ' + st.roots.missing.join(', '));
   }
   if (!st.roots.configured) {
-    alertLoud('No folders configured — set REAL_ROOTS in agent/data.py');
+    alertLoud('No folders configured — set them in agent/data.py');
+  }
+  const off = (st.connectors || []).filter(c => !c.connected);
+  if (off.length) {
+    alertLoud('Not connected: ' + off.map(c => c.label).join(', ') +
+              ' — JARVIS will say so rather than guess.', 'warn');
   }
 }
 
@@ -94,6 +99,7 @@ async function loadGraph() {
   const g = await (await fetch('/api/graph')).json();
   Graph.load(g);
   renderHubs(g.hubs);
+  renderDomains(g.domains || {});
   renderFilter(g.counts);
 }
 
@@ -108,6 +114,21 @@ function renderHubs(hubs) {
      </li>`).join('');
   $$('#hubs li').forEach(li =>
     li.onclick = () => Graph.focusById(li.dataset.id));
+}
+
+function renderDomains(domains) {
+  const LABEL = { school: 'School', business: 'Shopify', deca: 'DECA',
+                  unsorted: 'Unsorted' };
+  $('#domains').innerHTML = Object.entries(domains).map(([d, c]) =>
+    `<li data-domain="${d}">
+       <span class="dot" style="background:${Graph.domainColour(d)}"></span>
+       <span class="name">${esc(LABEL[d] || d)}</span>
+       <span class="num">${c}</span>
+     </li>`).join('');
+  $$('#domains li').forEach(li => li.onclick = () => {
+    const on = Graph.toggleDomain(li.dataset.domain);
+    li.classList.toggle('off', !on);
+  });
 }
 
 function renderFilter(counts) {
@@ -137,7 +158,7 @@ async function openNote(id) {
   $('#inspector').classList.remove('hint');
   $('#inspector').innerHTML =
     `<div class="title">${esc(n.title)}</div>
-     <div class="sub">${esc(n.type)} · ${n.degree} links · ${n.words} words · ${esc(n.file)}</div>
+     <div class="sub">${esc(n.domain || '—')} · ${esc(n.type)} · ${n.degree} links · ${esc(n.file)}</div>
      ${meta}
      ${n.unreadable ? '<div class="flag">This PDF has no extractable text. Nothing was guessed from it.</div>' : ''}
      <div class="body">${esc((n.text || '').slice(0, 1400))}</div>
@@ -178,7 +199,7 @@ async function ask(text) {
       body: JSON.stringify({ text, session: S.session }),
     })).json();
   } catch (e) {
-    $('#spoken').textContent = 'The server did not answer.';
+    $('#spoken').textContent = 'The server did not answer, Sir.';
     setState('idle');
     return;
   }
@@ -207,6 +228,8 @@ function renderCard(c) {
   if (!c) return '';
   switch (c.kind) {
     case 'search':   return cardSearch(c);
+    case 'deadlines':return cardDeadlines(c);
+    case 'store':    return cardStore(c);
     case 'research': return cardResearch(c);
     case 'inbox':    return cardInbox(c);
     case 'brief':    return cardBrief(c);
@@ -221,10 +244,12 @@ function renderCard(c) {
 function cardSearch(c) {
   if (c.empty) return row('searched', `${c.searched} notes, nothing matched`);
   const hits = c.hits.map(h => row(h.type,
-    `<em class="file" data-id="${h.id}">${esc(h.file)}</em><br>
+    `<em class="file" data-id="${h.id}">${esc(h.file)}</em>
+     <span class="muted">${esc(h.domain || '')}</span><br>
      <span class="muted">${esc(h.snippet)}</span>
-     ${h.amounts && h.amounts.length ? `<br><span class="muted">${esc(h.amounts.join('  '))}</span>` : ''}
-     ${h.status ? `<br><span class="muted">status: ${esc(h.status)}</span>` : ''}`)).join('');
+     ${h.due ? `<br><span class="muted">${esc(h.due)}</span>` : ''}
+     ${h.status ? `<br><span class="muted">status: ${esc(h.status)}</span>` : ''}
+     ${h.demo_only ? '<br><span class="muted">demo figures only</span>' : ''}`)).join('');
   const mem = (c.memory || []).map(m =>
     row('memory', `<em>${esc(m.fact)}</em><br><span class="muted">${esc(m.file)}</span>`)).join('');
   const warn = (c.warnings || []).map(w =>
@@ -236,10 +261,12 @@ function cardResearch(c) {
   const web = (c.results || []).map(r =>
     row('web', `<em>${esc(r.title)}</em><br><span class="muted">${esc(r.snippet)}</span>`)).join('');
   const yours = (c.your_numbers || []).map(y =>
-    row('yours', `<em>${esc(y.amounts.join('  '))}</em> — ${esc(y.title)}
-                  <br><span class="muted">${esc(y.file)}${y.status ? ' · ' + esc(y.status) : ''}</span>`)).join('');
+    row('yours', `<em>${esc(y.price)}</em> — ${esc(y.title)}
+                  ${y.demo ? '<br><span class="muted">demo figure</span>' : ''}`)).join('');
+  const off = c.store && !c.store.connected
+    ? `<div class="flag">${esc(c.store.reason)}</div>` : '';
   return (c.error ? `<div class="flag">${esc(c.error)}</div>` : '') +
-         yours + web + `<div class="qual">${esc(c.note)}</div>`;
+         off + yours + web + `<div class="qual">${esc(c.note)}</div>`;
 }
 
 function cardInbox(c) {
@@ -247,6 +274,7 @@ function cardInbox(c) {
   const msgs = c.messages.map(m => row(
     m.unread ? 'unread' : 'read',
     `<em>${esc(m.from)}</em> — ${esc(m.subject)}
+     <span class="muted">${esc(m.domain || '')}</span>
      <br><span class="muted">${esc(m.body.slice(0, 120))}</span>
      <br><span class="muted">${m.in_your_files
         ? 'in your files: ' + m.matched.map(x => esc(x.file)).join(', ')
@@ -256,20 +284,51 @@ function cardInbox(c) {
   return msgs + flags + `<div class="qual">${esc(c.note)}</div>`;
 }
 
+function cardDeadlines(c) {
+  if (!c.items.length) return row('window', `nothing in ${c.window_days} days`);
+  const it = c.items.map(i => row(
+    i.days < 0 ? 'overdue' : i.domain,
+    `<em class="file" data-id="${i.id}">${esc(i.what)}</em>
+     <br><span class="muted">${esc(i.when)} · ${esc(i.due)} · ${esc(i.status)}</span>`)).join('');
+  return it + `<div class="qual">${c.overdue} overdue of ${c.total}. ${esc(c.ordering || '')}. ${esc(c.note || '')}</div>`;
+}
+
+function cardStore(c) {
+  if (!c.connected) {
+    return `<div class="flag">${esc(c.note)}</div>`;
+  }
+  if (c.error) return `<div class="flag">${esc(c.error)}</div>`;
+  const k = c.counts || {};
+  const head = row('orders', `<em>${k.orders}</em> total · ${k.unfulfilled} unfulfilled · ${k.backlog} past window`);
+  const os = (c.orders || []).slice(0, 6).map(o => row(
+    o.fulfilment === 'fulfilled' ? 'done' : 'open',
+    `<em>${esc(o.name)}</em> ${esc(o.currency || '')} ${esc(o.total)}
+     <br><span class="muted">${esc(o.customer || 'no customer')} · ${esc(o.items.join(', '))}</span>`)).join('');
+  const low = (c.low_stock || []).map(p => row('low stock',
+    `<em>${esc(p.title)}</em> — ${esc(p.inventory)} left`)).join('');
+  return head + os + low +
+    `<div class="qual">${esc(c.qualifier || '')} ${esc(c.note || '')}</div>`;
+}
+
 function cardBrief(c) {
+  const od = (c.overdue || []).map(o =>
+    row('overdue', `<em>${esc(o.what)}</em> <span class="muted">${esc(o.domain)} · ${esc(o.when)}</span>`)).join('');
+  const soon = (c.soon || []).map(o =>
+    row('soon', `<em>${esc(o.what)}</em> <span class="muted">${esc(o.domain)} · ${esc(o.when)}</span>`)).join('');
   const ev = (c.events || []).map(e =>
-    row('diary', `<em>${esc(e.title)}</em> <span class="muted">${esc(e.start.slice(11))} · ${e.minutes}m</span>`)).join('');
+    row('diary', `<em>${esc(e.title)}</em> <span class="muted">${esc((e.start || '').slice(11, 16))}${e.minutes ? ' · ' + e.minutes + 'm' : ''}</span>`)).join('');
   const sl = (c.slipped || []).map(s =>
     row('slipped', `${esc(s.title)} <span class="muted">due ${esc(s.due)}</span>`)).join('');
-  const un = (c.unread || []).slice(0, 5).map(u =>
-    row('unread', `<em>${esc(u.from)}</em> — ${esc(u.subject)}`)).join('');
-  const inv = (c.unpaid || []).map(i =>
-    row('owed', `<em>${esc(i.amount)}</em> ${esc(i.client || '')}
-                 <br><span class="muted">${esc(i.status)} · ${esc(i.file)}</span>`)).join('');
-  const t = c.unpaid_total || {};
-  return ev + sl + un + inv +
-    row('outstanding', `<em>${t.outstanding}</em> across ${t.count}`) +
-    `<div class="qual">${esc(t.qualifier || '')} ${esc(c.caveat || '')}</div>`;
+  const un = (c.unread || []).map(u =>
+    row('unread', `<em>${esc(u.from)}</em> — ${esc(u.subject)} <span class="muted">${esc(u.domain || '')}</span>`)).join('');
+  const st = c.store || {};
+  const store = st.connected
+    ? row('store', `${(st.counts || {}).unfulfilled} unfulfilled of ${(st.counts || {}).orders}${st.demo ? ' <span class="muted">(demo)</span>' : ''}`)
+    : row('store', '<span class="muted">not connected</span>');
+  const off = (c.connectors || []).filter(x => !x.connected)
+    .map(x => `<div class="flag">${esc(x.label)}: ${esc(x.reason)}</div>`).join('');
+  return od + soon + ev + sl + un + store + off +
+    `<div class="qual">${esc(c.timezone || '')}. ${esc(c.caveat || '')}</div>`;
 }
 
 function cardPlan(c) {
@@ -532,13 +591,14 @@ function drawReactor() {
 /* ================================================================ wiring */
 
 const EXAMPLES = [
-  'what did we agree with Rowan Property?',
+  'what is due this week?',
   'brief me',
-  'why is that invoice only half paid?',
-  'plan my day',
-  'who wrote this week that I already know?',
-  'remember that I do not take work under two thousand',
-  'what is the going rate for a retainer like mine?',
+  'what needs my attention first?',
+  'how is the store doing?',
+  'when is the DECA registration deadline?',
+  'what did Ms. Whitfield want?',
+  'remember that the chemistry makeup lab is during tutorial',
+  'how should I study for the calculus test?',
 ];
 
 function rotateExample() {
@@ -564,7 +624,7 @@ function wire() {
   $('#memBtn').onclick = async () => {
     const m = await (await fetch('/api/memory')).json();
     $('#spoken').classList.remove('hint');
-    $('#spoken').textContent = `${m.count} facts remembered.`;
+    $('#spoken').textContent = `${m.count} facts remembered, Sir.`;
     $('#card').innerHTML = renderCard({ kind: 'memories', facts: m.facts });
   };
   $$('[data-say]').forEach(b => b.onclick = () => ask(b.dataset.say));

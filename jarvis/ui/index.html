@@ -43,6 +43,11 @@
 
 <!-- right ----------------------------------------------------------->
 <aside class="panel right">
+  <section class="block">
+    <div class="label">Worlds</div>
+    <ul id="domains" class="rows"></ul>
+  </section>
+
   <section class="block cap">
     <div class="label">Filter</div>
     <ul id="filter" class="rows"></ul>
@@ -55,7 +60,7 @@
 
   <section class="block grow" id="responseBlock">
     <div class="label">Response</div>
-    <div id="spoken" class="spoken hint">Ask me something.</div>
+    <div id="spoken" class="spoken hint">Standing by, Sir.</div>
     <div id="card"></div>
   </section>
 </aside>
@@ -65,10 +70,12 @@
   <div id="caption" class="caption"></div>
   <div class="askrow">
     <div class="bars" id="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-    <input id="ask" autocomplete="off" spellcheck="false" placeholder="Ask me something">
+    <input id="ask" autocomplete="off" spellcheck="false" placeholder="Standing by, Sir">
     <button class="act mic" id="micBtn" title="Mic — press once, then talk (Space)">Mic</button>
     <button class="act" id="muteBtn" title="Mute the voice">Mute</button>
     <button class="act" data-say="brief me">Brief</button>
+    <button class="act" data-say="what is due">Due</button>
+    <button class="act" data-say="how is the store">Store</button>
     <button class="act" data-say="plan my day">Plan</button>
     <button class="act" id="memBtn">Memory</button>
   </div>

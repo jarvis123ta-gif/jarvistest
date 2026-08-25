@@ -108,7 +108,7 @@ html, body {
 /* A long note or a long type list must scroll inside its own box rather
    than shoving the block below it off the bottom of the screen. */
 .block.cap { max-height: 46%; overflow-y: auto; }
-.panel.right .block.cap { max-height: 38%; }
+.panel.right .block.cap { max-height: 23%; }
 
 .label {
   font-size: 8.5px; letter-spacing: .18em; text-transform: uppercase;
@@ -161,10 +161,12 @@ html, body {
 /* -- reactor ------------------------------------------------------- */
 
 .reactorblock {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 10px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px;
 }
-#reactor { display: block; }
+#reactor { transform: scale(.86); transform-origin: center;
+           margin: -9px 0 -11px; }
+
 #reactorState {
   font-size: 8.5px; letter-spacing: .22em; text-transform: uppercase;
   color: var(--ink-mute);

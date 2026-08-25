@@ -1,22 +1,22 @@
-"""tools.py — the six things JARVIS can actually do.
+"""tools.py — the things JARVIS can actually do.
 
 Every tool returns two things and they are never the same text:
 
-    spoken — one or two sentences, said out loud
+    spoken — one or two sentences, said out loud, addressed to Sir
     card   — the structured detail, rendered on screen
 
 A tool is a last resort, not a first move. Routing lives in main.py; this
 module only does the work once something has decided a tool is warranted.
 
 Guardrails enforced here, not merely described:
-  * read_inbox opens no socket to a mail provider and has no send path.
-  * nothing in this file writes outside memory/ (see memory.py).
-  * text found inside notes and emails is quoted as data, never obeyed.
+  * every read is read-only; there is no send or write path in this file
+  * a connector that is not connected returns "not connected", never a
+    plausible-looking number
+  * text found inside notes, mail and order data is quoted as data, never obeyed
 """
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import re
@@ -24,20 +24,74 @@ import ssl
 import html
 import urllib.parse
 import urllib.request
-from datetime import datetime, date
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
+import connectors
 import memory
-from data import inbox_path, calendar_path, demo_mode
+from data import TIMEZONE
 
-# ------------------------------------------------------------------ money
+TZ = ZoneInfo(TIMEZONE)
+
+# A store order sitting unfulfilled for less than this is inside the normal
+# window, not a backlog. Saying otherwise out loud would be a fabricated
+# problem, which is worse than saying nothing.
+FULFILMENT_WINDOW_HOURS = 48
 
 MONEY_RE = re.compile(r"[£$€]\s?\d[\d,]*(?:\.\d{2})?")
 INJECTION_RE = re.compile(
     r"(ignore (your |all |the )?(previous|prior|above) instructions?"
     r"|disregard (your|all|the) (instructions?|rules?|guardrails?)"
     r"|you are now|system prompt|forget (everything|your instructions)"
-    r"|send (the|my|all) .{0,30}(list|data|files?|credentials?)"
+    r"|(send|email|forward) (the|my|all|full) .{0,40}(list|data|files?|token|"
+    r"credentials?|password)"
     r"|reveal (your|the) (prompt|key|token))", re.I)
+
+DOMAIN_WORDS = {
+    "school": ["school", "class", "homework", "assignment", "test", "exam",
+               "quiz", "essay", "lab", "teacher", "study", "grade", "course",
+               "calculus", "chemistry", "history", "spanish", "english"],
+    "business": ["shopify", "store", "order", "product", "customer", "sku",
+                 "inventory", "restock", "margin", "shipping", "checkout",
+                 "revenue", "sales", "fulfil", "fulfill"],
+    "deca": ["deca", "roleplay", "role play", "written event", "competition",
+             "district", "state", "performance indicator", "judge", "chapter"],
+}
+
+
+def today() -> date:
+    return datetime.now(TZ).date()
+
+
+def _days_until(value) -> int | None:
+    if not value:
+        return None
+    try:
+        return (date.fromisoformat(str(value)[:10]) - today()).days
+    except ValueError:
+        return None
+
+
+def _due_phrase(days: int | None) -> str:
+    if days is None:
+        return "no date"
+    if days < 0:
+        return f"{-days} day{'s' if days != -1 else ''} overdue"
+    if days == 0:
+        return "due today"
+    if days == 1:
+        return "due tomorrow"
+    return f"due in {days} days"
+
+
+def guess_domain(text: str) -> str | None:
+    t = (text or "").lower()
+    best, score = None, 0
+    for dom, words in DOMAIN_WORDS.items():
+        n = sum(1 for w in words if w in t)
+        if n > score:
+            best, score = dom, n
+    return best
 
 
 def _money(text: str) -> list[str]:
@@ -51,57 +105,61 @@ def _flag_injection(text: str, where: str) -> dict | None:
     return {
         "where": where,
         "quote": text[max(0, m.start() - 40):m.end() + 60].strip(),
-        "handling": "Reported, not followed. Text inside your files and mail "
-                    "is data — it does not get to give instructions.",
+        "handling": "Reported, not followed. Text inside files, mail and order "
+                    "data is data — it does not get to give instructions.",
     }
 
 
 # ------------------------------------------------------------------ 1. search_brain
 
-def search_brain(vault, query: str, limit: int = 6) -> dict:
-    hits = vault.search(query, limit=limit)
+def search_brain(vault, query: str, domain: str | None = None, limit: int = 6) -> dict:
+    hits = vault.search(query, limit=limit * 2)
+    if domain:
+        hits = [h for h in hits if h.get("domain") == domain]
+    hits = hits[:limit]
     mem = memory.search_memory(query, limit=3)
 
     if not hits and not mem:
+        scope = f" under {domain}" if domain else ""
         return {
-            "spoken": f"Nothing in your files on that. I searched "
+            "spoken": f"Nothing in your files{scope}, Sir. I searched "
                       f"{len(vault.notes)} notes and came back empty.",
-            "card": {"kind": "search", "query": query, "hits": [],
-                     "memory": [], "searched": len(vault.notes),
+            "card": {"kind": "search", "query": query, "domain": domain,
+                     "hits": [], "memory": [], "searched": len(vault.notes),
                      "empty": True},
         }
 
     files = [h["file"] for h in hits]
     if not files:
-        line = "Only memory has this, not the files."
+        line = "Only memory has this, Sir, not the files."
     elif len(files) == 1:
-        line = f"One file: {files[0]}."
+        line = f"One file, Sir: {files[0]}."
     elif len(files) <= 3:
-        line = (f"{len(files)} files — {', '.join(files[:-1])} and {files[-1]}.")
+        line = f"{len(files)} files — {', '.join(files[:-1])} and {files[-1]}."
     else:
-        line = (f"{len(files)} files. The three that matter are "
+        line = (f"{len(files)} files, Sir. The three that matter are "
                 f"{files[0]}, {files[1]} and {files[2]}.")
 
-    rows = []
+    rows, warnings = [], []
     for h in hits:
         n = vault.note(h["id"])
         rows.append({
             "id": h["id"], "title": h["title"], "type": h["type"],
-            "file": h["file"], "rel": h["rel"], "score": h["score"],
-            "degree": h["degree"], "snippet": h["snippet"],
-            "amounts": _money(n["text"]) if n else [],
+            "domain": h.get("domain"), "file": h["file"], "rel": h["rel"],
+            "score": h["score"], "degree": h["degree"], "snippet": h["snippet"],
+            "due": (n["meta"].get("due") or n["meta"].get("date")) if n else None,
             "status": (n["meta"].get("status") if n else None),
-            "client": (n["meta"].get("client") if n else None),
-            "date": (n["meta"].get("date") if n else None),
+            "course": (n["meta"].get("course") if n else None),
+            "demo_only": (n["meta"].get("demo_only") == "true") if n else False,
         })
-
-    warnings = [w for w in (_flag_injection(vault.note(h["id"])["text"], h["file"])
-                            for h in hits) if w]
+        w = _flag_injection(n["text"], h["file"]) if n else None
+        if w:
+            warnings.append(w)
 
     return {
         "spoken": line,
-        "card": {"kind": "search", "query": query, "hits": rows,
-                 "memory": mem, "searched": len(vault.notes),
+        "card": {"kind": "search", "query": query, "domain": domain,
+                 "hits": rows, "memory": mem, "searched": len(vault.notes),
                  "cited": [h["file"] for h in hits],
                  "warnings": warnings, "empty": False},
     }
@@ -117,22 +175,18 @@ def _ssl_ctx() -> ssl.SSLContext:
     return ctx
 
 
-def _get(url: str, timeout: int = 20) -> str:
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (compatible; jarvis/1.0)"})
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as r:
-        return r.read().decode("utf-8", "replace")
-
-
 def _ddg(query: str, limit: int = 5) -> list[dict]:
-    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
-    page = _get(url)
+    req = urllib.request.Request(
+        "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query),
+        headers={"User-Agent": "Mozilla/5.0 (compatible; jarvis/1.0)"})
+    with urllib.request.urlopen(req, timeout=20, context=_ssl_ctx()) as r:
+        page = r.read().decode("utf-8", "replace")
     out = []
+    strip = lambda s: html.unescape(re.sub(r"<[^>]+>", "", s)).strip()
     for m in re.finditer(
             r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>'
             r'.*?class="result__snippet"[^>]*>(.*?)</a>', page, re.S):
         href, title, snip = m.groups()
-        strip = lambda s: html.unescape(re.sub(r"<[^>]+>", "", s)).strip()
         if "uddg=" in href:
             href = urllib.parse.unquote(href.split("uddg=")[1].split("&")[0])
         out.append({"title": strip(title), "url": href, "snippet": strip(snip)})
@@ -142,278 +196,420 @@ def _ddg(query: str, limit: int = 5) -> list[dict]:
 
 
 def research_web(vault, query: str) -> dict:
-    """Look it up, then land it back on the user's own numbers."""
+    """Look it up, then land it back on their own numbers — but only on
+    numbers that actually exist. If the store is not connected there is
+    nothing of theirs to compare against, and that is what gets said."""
     try:
-        results = _ddg(query)
-        error = None
+        results, error = _ddg(query), None
     except Exception as e:                                  # noqa: BLE001
         results, error = [], f"web unreachable: {e}"
 
-    # What do the user's own files say about money near this topic?
-    local = vault.search(query, limit=4)
-    yours = []
-    for h in local:
-        n = vault.note(h["id"])
-        amounts = _money(n["text"])
-        if amounts:
-            yours.append({"file": h["file"], "title": h["title"],
-                          "type": h["type"], "amounts": amounts[:3],
-                          "status": n["meta"].get("status")})
+    shop = connectors.get("shopify")
+    st = shop.status()
+    yours, ours_note = [], ""
+    if st["connected"]:
+        prods = shop.products()
+        if prods.get("ok"):
+            q = [w for w in re.split(r"\W+", query.lower()) if len(w) > 3]
+            for p in prods.get("products", []):
+                if not q or any(w in (p.get("title") or "").lower() for w in q):
+                    yours.append({"title": p.get("title"), "price": p.get("price"),
+                                  "cost": p.get("cost"), "demo": bool(p.get("demo"))})
+            yours = yours[:5]
+        ours_note = ("These are demo figures, not the real store."
+                     if st["mode"] == "demo" else "From the connected store.")
+    else:
+        ours_note = st["reason"]
 
-    external_prices = []
+    external = []
     for r in results:
-        external_prices += _money(r["snippet"])
+        external += _money(r["snippet"])
 
     if error:
-        spoken = "Could not reach the web just now. Your own files still have "
-        spoken += (f"{yours[0]['amounts'][0]} in {yours[0]['file']}." if yours
-                   else "nothing priced on this either.")
-    elif yours and external_prices:
-        spoken = (f"Out there it's around {external_prices[0]}. Against your "
-                  f"{yours[0]['amounts'][0]} in {yours[0]['file']}, that's the "
-                  "comparison worth making.")
+        spoken = f"The web is unreachable, Sir. {error.split(':')[0]}."
+    elif not st["connected"]:
+        spoken = (f"{len(results)} sources, Sir. Shopify is not connected, so I "
+                  "have none of your numbers to weigh them against.")
+    elif yours and external:
+        spoken = (f"Outside, around {external[0]}. Yours is "
+                  f"{yours[0].get('price')} on {yours[0].get('title')}"
+                  + (" — demo figures." if yours[0].get("demo") else "."))
     elif results:
-        spoken = (f"{len(results)} sources. Nothing in your files prices this, "
-                  "so I have nothing of yours to weigh it against.")
+        spoken = f"{len(results)} sources, Sir. Nothing of yours matches to compare."
     else:
-        spoken = "No results, and nothing local to compare it to."
+        spoken = "No results, Sir."
 
     return {
         "spoken": spoken,
         "card": {"kind": "research", "query": query, "results": results,
                  "error": error, "your_numbers": yours,
-                 "external_prices": external_prices[:5],
-                 "note": "External figures are quoted from the pages above. "
-                         "Your figures come from your own files, named."},
+                 "store": st, "external_prices": external[:5],
+                 "note": f"External figures are quoted from the pages above. {ours_note}"},
     }
 
 
 # ------------------------------------------------------------------ 3. read_inbox
 
-def _load_json(path, default):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:                                       # noqa: BLE001
-        return default
-
-
 def read_inbox(vault, limit: int = 12, unread_only: bool = False) -> dict:
     """Read-only. There is no send path in this function, by design."""
-    path = inbox_path()
-    msgs = _load_json(path, None)
-    if msgs is None:
-        return {
-            "spoken": "No inbox to read — the file it expects is not there.",
-            "card": {"kind": "inbox", "error": f"cannot read {path}",
-                     "hint": "demo mode reads data/inbox.json; live mode reads "
-                             "whatever JARVIS_INBOX points at. JARVIS never "
-                             "authenticates to a mail provider.",
-                     "messages": []},
-        }
-
-    if unread_only:
-        msgs = [m for m in msgs if m.get("unread")]
-    msgs = sorted(msgs, key=lambda m: m.get("received", ""), reverse=True)[:limit]
+    gmail = connectors.get("gmail")
+    res = gmail.messages(limit=limit, unread_only=unread_only)
+    if not res.get("ok"):
+        return {"spoken": res.get("spoken", "Mail is unavailable, Sir."),
+                "card": {"kind": "inbox", "error": res.get("reason"),
+                         "connector": gmail.status(), "messages": [],
+                         "readonly": True}}
 
     rows, known_n, flags = [], 0, []
-    for m in msgs:
+    by_domain = {"school": 0, "business": 0, "deca": 0, "unsorted": 0}
+    for m in res["messages"]:
         sender = m.get("from", "unknown")
-        hits = vault.search(f"{sender} {m.get('client') or ''}", limit=2)
-        known = [h for h in hits if h["score"] > 2]
-        if known:
+        blob = f"{sender} {m.get('subject','')} {m.get('body','')}"
+        dom = m.get("domain") or guess_domain(blob) or "unsorted"
+        by_domain[dom] = by_domain.get(dom, 0) + 1
+
+        # Match on the sender alone, and demand a strong hit — matching on
+        # the subject line makes every stranger look like someone we know.
+        hits = [h for h in vault.search(sender, limit=2) if h["score"] > 6]
+        if hits:
             known_n += 1
-        warn = _flag_injection(f"{m.get('subject','')} {m.get('body','')}",
-                               f"email from {sender}")
+        warn = _flag_injection(blob, f"email from {sender}")
         if warn:
             flags.append(warn)
         rows.append({
             "id": m.get("id"), "from": sender, "subject": m.get("subject"),
-            "body": m.get("body", "")[:400],
+            "body": (m.get("body") or "")[:400], "domain": dom,
             "received": m.get("received"), "unread": bool(m.get("unread")),
-            "in_your_files": bool(known),
-            "matched": [{"title": h["title"], "file": h["file"], "type": h["type"]}
-                        for h in known],
+            "in_your_files": bool(hits),
+            "matched": [{"title": h["title"], "file": h["file"]} for h in hits],
             "suspicious": bool(warn),
         })
 
-    strangers = len(rows) - known_n
-    spoken = (f"{len(rows)} in, {known_n} from people already in your files, "
-              f"{strangers} you've no record of.")
+    unread = sum(1 for r in rows if r["unread"])
+    top = max(("school", "business", "deca"), key=lambda d: by_domain.get(d, 0))
+    spoken = (f"{unread} unread of {len(rows)}, Sir — mostly {top}. "
+              f"{known_n} from people already in your files.")
     if flags:
-        spoken += " One is trying to give me instructions; I've flagged it, not followed it."
+        spoken += " One is trying to give me instructions; flagged, not followed."
 
     return {
         "spoken": spoken,
         "card": {"kind": "inbox", "messages": rows, "known": known_n,
-                 "strangers": strangers, "flags": flags,
-                 "readonly": True,
+                 "unread": unread, "by_domain": by_domain, "flags": flags,
+                 "connector": gmail.status(), "readonly": True,
                  "note": "Read-only. Nothing here can be sent — drafts only, "
                          "and only when you ask."},
     }
 
 
-# ------------------------------------------------------------------ 4. brief_me
+# ------------------------------------------------------------------ 4. deadlines
 
-def brief_me(vault) -> dict:
-    cal = _load_json(calendar_path(), {"events": [], "slipped": []})
-    inbox = _load_json(inbox_path(), []) or []
-    unread = [m for m in inbox if m.get("unread")]
-    events = cal.get("events", [])
-    slipped = cal.get("slipped", [])
-
-    unpaid = []
+def _deadline_rows(vault) -> list[dict]:
+    rows = []
     for n in vault.notes.values():
-        if n["type"] == "invoice" and "paid" != (n["meta"].get("status") or ""):
-            unpaid.append({"title": n["title"], "file": n["file"],
-                           "amount": n["meta"].get("amount"),
-                           "status": n["meta"].get("status"),
-                           "client": n["meta"].get("client")})
-    unpaid.sort(key=lambda x: -_amount_value(x.get("amount")))
+        meta = n["meta"]
+        due = meta.get("due") or (meta.get("date") if n["type"] == "test" else None)
+        d = _days_until(due)
+        if d is None or d > 45:
+            continue
+        status = (meta.get("status") or "").lower()
+        if status in ("submitted", "done", "complete"):
+            continue
+        rows.append({
+            "what": n["title"], "type": n["type"], "domain": n["domain"],
+            "due": str(due)[:10], "days": d, "when": _due_phrase(d),
+            "status": status or "open", "file": n["file"], "id": n["id"],
+            "course": meta.get("course"), "weight": meta.get("weight"),
+        })
+    rows.sort(key=lambda r: (r["days"], 0 if r["domain"] == "school" else 1))
+    return rows
 
-    nxt = events[0]["title"] if events else "nothing"
-    spoken = (f"{len(events)} in the diary, next is {nxt}. "
-              f"{len(unread)} unread, {len(slipped)} slipped.")
+
+def deadlines(vault, domain: str | None = None, within_days: int = 14) -> dict:
+    rows = [r for r in _deadline_rows(vault) if r["days"] <= within_days]
+    if domain:
+        rows = [r for r in rows if r["domain"] == domain]
+    overdue = [r for r in rows if r["days"] < 0]
+
+    if not rows:
+        scope = f"{domain} " if domain else ""
+        return {"spoken": f"No {scope}deadlines in the next {within_days} days, Sir.",
+                "card": {"kind": "deadlines", "items": [], "overdue": 0,
+                         "window_days": within_days, "domain": domain}}
+
+    if overdue:
+        spoken = (f"{len(overdue)} overdue, Sir. The oldest is {overdue[0]['what']}, "
+                  f"{overdue[0]['when']}.")
+    else:
+        spoken = (f"{len(rows)} in the next {within_days} days, Sir. "
+                  f"Nearest is {rows[0]['what']}, {rows[0]['when']}.")
 
     return {
         "spoken": spoken,
-        "card": {"kind": "brief", "generated": datetime.now().isoformat(timespec="minutes"),
-                 "events": events, "slipped": slipped,
-                 "unread": [{"from": m.get("from"), "subject": m.get("subject")}
-                            for m in unread],
-                 "unpaid": unpaid[:6],
-                 "unpaid_total": _fmt_total(unpaid),
-                 "caveat": "Invoice totals below are what the files say. A "
-                           "part-paid invoice on a running job is not a "
-                           "discount — the status column says which it is."},
+        "card": {"kind": "deadlines", "items": rows[:14],
+                 "overdue": len(overdue), "total": len(rows),
+                 "window_days": within_days, "domain": domain,
+                 "ordering": "soonest first; school breaks ties",
+                 "note": "Dates are Central Time, read from the files. "
+                         "Nothing here is inferred."},
     }
 
 
-def _amount_value(s) -> float:
-    if not s:
-        return 0.0
-    m = re.search(r"\d[\d,]*(?:\.\d+)?", str(s))
-    return float(m.group(0).replace(",", "")) if m else 0.0
+# ------------------------------------------------------------------ 5. store_status
+
+def store_status(vault) -> dict:
+    shop = connectors.get("shopify")
+    st = shop.status()
+    if not st["connected"]:
+        return {"spoken": (f"Shopify is not connected, Sir. I have no orders, "
+                           "products or margins, and I will not invent any."),
+                "card": {"kind": "store", "connector": st, "connected": False,
+                         "orders": [], "products": [],
+                         "note": st["reason"]}}
+
+    orders = shop.orders(limit=30)
+    products = shop.products(limit=50)
+    if not orders.get("ok"):
+        return {"spoken": orders.get("spoken", "Shopify did not answer, Sir."),
+                "card": {"kind": "store", "connector": st, "connected": True,
+                         "error": orders.get("reason"), "orders": []}}
+
+    rows = orders.get("orders", [])
+    unfulfilled = [o for o in rows if o.get("fulfilment") != "fulfilled"]
+    fresh = [o for o in unfulfilled
+             if (o.get("hours_old") or 0) < FULFILMENT_WINDOW_HOURS]
+    backlog = [o for o in unfulfilled if o not in fresh]
+    unpaid = [o for o in rows if o.get("financial") not in ("paid", None)]
+    low = [p for p in products.get("products", [])
+           if isinstance(p.get("inventory"), int) and p["inventory"] < 5]
+
+    demo = st["mode"] == "demo"
+    if backlog:
+        spoken = (f"{len(backlog)} orders past the {FULFILMENT_WINDOW_HOURS}-hour "
+                  f"window, Sir" + (" — demo data." if demo else "."))
+    elif unfulfilled:
+        spoken = (f"{len(unfulfilled)} unfulfilled, Sir, all inside the "
+                  f"{FULFILMENT_WINDOW_HOURS}-hour window — not a backlog"
+                  + (", and demo data." if demo else "."))
+    else:
+        spoken = "Everything is fulfilled, Sir." + (" Demo data." if demo else "")
+    if low:
+        spoken += f" {len(low)} products low on stock."
+
+    return {
+        "spoken": spoken,
+        "card": {"kind": "store", "connector": st, "connected": True,
+                 "demo": demo,
+                 "orders": rows[:12], "counts": {
+                     "orders": len(rows), "unfulfilled": len(unfulfilled),
+                     "inside_window": len(fresh), "backlog": len(backlog),
+                     "unpaid": len(unpaid)},
+                 "low_stock": low[:8],
+                 "qualifier": (f"{len(fresh)} unfulfilled orders are inside the "
+                               f"{FULFILMENT_WINDOW_HOURS}-hour fulfilment window. "
+                               "That is normal, not a backlog.") if fresh else
+                              "No orders are sitting inside the fulfilment window.",
+                 "note": ("These are demo figures. Connect Shopify for the real store."
+                          if demo else "Live from the connected store, read-only.")},
+    }
 
 
-def _fmt_total(rows: list[dict]) -> dict:
-    total = sum(_amount_value(r.get("amount")) for r in rows)
-    part = [r for r in rows if "part" in (r.get("status") or "")]
-    return {"outstanding": round(total, 2), "count": len(rows),
-            "part_paid_still_running": len(part),
-            "qualifier": (f"{len(part)} of these are part-paid because the job "
-                          "is still running, not because anything was discounted.")
-                         if part else "None of these are part-paid."}
+# ------------------------------------------------------------------ 6. brief_me
+
+def brief_me(vault) -> dict:
+    cal = connectors.get("calendar").events()
+    events = cal.get("events", []) if cal.get("ok") else []
+    slipped = cal.get("slipped", []) if cal.get("ok") else []
+
+    mail = connectors.get("gmail").messages(limit=25)
+    unread = [m for m in mail.get("messages", []) if m.get("unread")] \
+        if mail.get("ok") else []
+
+    dl = _deadline_rows(vault)
+    overdue = [r for r in dl if r["days"] < 0]
+    soon = [r for r in dl if 0 <= r["days"] <= 7]
+    store = store_status(vault)
+
+    lead = None
+    if overdue:
+        lead = f"{overdue[0]['what']} is {overdue[0]['when']}"
+    elif soon:
+        lead = f"{soon[0]['what']} is {soon[0]['when']}"
+    elif events:
+        lead = f"next up is {events[0]['title']}"
+
+    spoken = (f"{lead}, Sir. {len(unread)} unread, {len(events)} in the diary."
+              if lead else
+              f"Nothing overdue, Sir. {len(unread)} unread, {len(events)} in the diary.")
+
+    return {
+        "spoken": spoken,
+        "card": {"kind": "brief",
+                 "generated": datetime.now(TZ).isoformat(timespec="minutes"),
+                 "timezone": TIMEZONE,
+                 "events": events, "slipped": slipped,
+                 "unread": [{"from": m.get("from"), "subject": m.get("subject"),
+                             "domain": m.get("domain")} for m in unread[:6]],
+                 "overdue": overdue[:6], "soon": soon[:6],
+                 "store": store["card"],
+                 "connectors": connectors.status_all(),
+                 "caveat": "Everything here is read from files and connected "
+                           "services. Anything not connected is listed as not "
+                           "connected rather than guessed."},
+    }
 
 
-# ------------------------------------------------------------------ 5. remember
+# ------------------------------------------------------------------ 7. remember
 
 def remember(vault, fact: str, tags: list[str] | None = None) -> dict:
     res = memory.remember(fact, source="asked", tags=tags or [])
     if not res.get("ok"):
-        return {"spoken": "Nothing to write down.",
+        return {"spoken": "Nothing to write down, Sir.",
                 "card": {"kind": "memory", "error": res.get("error")}}
     return {
         # Said out loud, every time. There is no quiet path.
-        "spoken": f"Written down: {res['fact'].rstrip('.')}. "
+        "spoken": f"Written down, Sir: {res['fact'].rstrip('.')}. "
                   f"That's memory slash {res['file']}.",
         "card": {"kind": "memory", "file": res["file"], "path": res["path"],
                  "date": res["date"], "fact": res["fact"],
                  "total": memory.stats()["count"],
-                 "note": "Written to memory/ only. Your own folders were not touched."},
+                 "note": "Written to memory/ only. Your folders and every "
+                         "connected service were not touched."},
     }
 
 
-# ------------------------------------------------------------------ 6. plan_day
+# ------------------------------------------------------------------ 8. plan_day
+
+# What moves the needle, per domain. School is the default priority and wins
+# ties, per CLAUDE.md.
+DOMAIN_WEIGHT = {"school": 1.0, "deca": 0.85, "business": 0.8, "unsorted": 0.5}
+TYPE_WEIGHT = {"test": 1.5, "assignment": 1.0, "deadline": 1.2,
+               "task": 0.8, "prep": 0.6}
+
 
 def plan_day(vault) -> dict:
-    """Five items, maximum, ordered by what moves money."""
-    cal = _load_json(calendar_path(), {"events": [], "slipped": []})
-    inbox = _load_json(inbox_path(), []) or []
     items: list[dict] = []
 
-    for n in vault.notes.values():
-        st = (n["meta"].get("status") or "").lower()
-        if n["type"] == "invoice" and st and "paid" != st:
-            v = _amount_value(n["meta"].get("amount"))
+    for r in _deadline_rows(vault):
+        if r["days"] > 10:
+            continue
+        urgency = max(0.2, 11 - min(r["days"], 10)) if r["days"] >= 0 else 14 + -r["days"]
+        weight = (urgency
+                  * DOMAIN_WEIGHT.get(r["domain"], 0.5)
+                  * TYPE_WEIGHT.get(r["type"], 0.7)
+                  * (1.4 if r.get("weight") == "major" else 1.0))
+        items.append({
+            "what": r["what"], "why": f"{r['domain']} · {r['when']}",
+            "domain": r["domain"], "weight": weight, "source": r["file"],
+            "qualifier": None,
+        })
+
+    store = store_status(vault)
+    sc = store["card"]
+    if sc.get("connected"):
+        backlog = (sc.get("counts") or {}).get("backlog", 0)
+        if backlog:
             items.append({
-                "what": f"Chase {n['title']}",
-                "why": f"{n['meta'].get('amount')} outstanding — {st}",
-                "weight": v * (0.6 if "part" in st else 1.0),
-                "source": n["file"],
-                "qualifier": ("part-paid because the job is still running, "
-                              "not discounted") if "part" in st else None,
+                "what": f"Fulfil {backlog} overdue orders",
+                "why": f"business · past the {FULFILMENT_WINDOW_HOURS}-hour window",
+                "domain": "business", "weight": 9.0 * DOMAIN_WEIGHT["business"],
+                "source": "shopify",
+                "qualifier": "demo data" if sc.get("demo") else None,
             })
-        if n["type"] == "proposal" and (n["meta"].get("status") or "") == "sent":
-            v = _amount_value(n["meta"].get("value"))
+        for p in (sc.get("low_stock") or [])[:1]:
             items.append({
-                "what": f"Follow up {n['title']}",
-                "why": f"{n['meta'].get('value')} sent, no answer recorded",
-                "weight": v * 0.8, "source": n["file"], "qualifier": None,
+                "what": f"Restock {p.get('title')}",
+                "why": f"business · {p.get('inventory')} left",
+                "domain": "business", "weight": 5.0 * DOMAIN_WEIGHT["business"],
+                "source": "shopify",
+                "qualifier": "demo data" if sc.get("demo") else None,
             })
 
-    for s in cal.get("slipped", []):
-        items.append({"what": s.get("title"), "why": f"was due {s.get('due')}",
-                      "weight": 1500.0, "source": "calendar", "qualifier": None})
+    mail = connectors.get("gmail").messages(limit=25, unread_only=True)
+    if mail.get("ok"):
+        for m in mail["messages"][:3]:
+            blob = f"{m.get('from','')} {m.get('subject','')} {m.get('body','')}"
+            if _flag_injection(blob, "mail"):
+                continue                       # never plan work off a hostile mail
+            dom = m.get("domain") or guess_domain(blob) or "unsorted"
+            items.append({
+                "what": f"Reply to {m.get('from')} — {m.get('subject')}",
+                "why": f"{dom} · unread",
+                "domain": dom, "weight": 4.5 * DOMAIN_WEIGHT.get(dom, 0.5),
+                "source": "gmail",
+                "qualifier": "draft only — nothing gets sent",
+            })
 
-    for m in inbox:
-        if m.get("unread") and m.get("client"):
-            items.append({"what": f"Reply to {m.get('from')} — {m.get('subject')}",
-                          "why": f"existing client, {m.get('client')}",
-                          "weight": 900.0, "source": "inbox",
-                          "qualifier": "draft only — nothing gets sent"})
-
-    items.sort(key=lambda x: -x["weight"])
+    items.sort(key=lambda x: (-x["weight"],
+                              0 if x["domain"] == "school" else 1))
     top = items[:5]
     for i, it in enumerate(top, 1):
         it["rank"] = i
         it.pop("weight", None)
 
-    spoken = (f"{len(top)} things. Start with: {top[0]['what']}." if top
-              else "Nothing in the files that moves money today.")
+    spoken = (f"Five things, Sir. Start with {top[0]['what']}." if top
+              else "Nothing pressing today, Sir.")
 
     return {
         "spoken": spoken,
-        "card": {"kind": "plan", "items": top,
-                 "considered": len(items),
-                 "ordering": "by money at stake, then by what has slipped",
+        "card": {"kind": "plan", "items": top, "considered": len(items),
+                 "ordering": "soonest and heaviest first, across school, "
+                             "business and DECA; school breaks ties",
+                 "timezone": TIMEZONE,
                  "note": "Nothing here sends anything. Drafts wait for you."},
     }
 
 
 # ------------------------------------------------------------------ dispatch
 
+_DOMAIN_ENUM = {"type": "string", "enum": ["school", "business", "deca"]}
+
 SCHEMA = [
     {"name": "search_brain",
-     "description": "Look up a specific fact in the user's own indexed files. "
-                    "Use only when the answer must come from their notes. "
-                    "Always name the files it came from.",
+     "description": "Look up a specific fact in the principals' own indexed "
+                    "files (school, Shopify, DECA). Use only when the answer "
+                    "must come from their notes. Always name the files.",
      "input_schema": {"type": "object", "properties": {
-         "query": {"type": "string", "description": "what to look for"}},
+         "query": {"type": "string", "description": "what to look for"},
+         "domain": dict(_DOMAIN_ENUM, description="narrow to one world")},
          "required": ["query"]}},
     {"name": "research_web",
-     "description": "Look something up on the web, then relate it back to the "
-                    "user's own numbers. Use for outside facts and prices.",
+     "description": "Look something up on the web, then relate it to their own "
+                    "numbers — but only numbers that actually exist. If Shopify "
+                    "is not connected, say so rather than comparing to nothing.",
      "input_schema": {"type": "object", "properties": {
          "query": {"type": "string"}}, "required": ["query"]}},
     {"name": "read_inbox",
-     "description": "Read recent mail, read-only, and say whether each sender "
-                    "already appears in the user's files. Cannot send.",
+     "description": "Read recent mail, read-only, sorted by which world it "
+                    "belongs to, and say who is already in their files. Cannot send.",
      "input_schema": {"type": "object", "properties": {
          "unread_only": {"type": "boolean"},
          "limit": {"type": "integer"}}, "required": []}},
+    {"name": "deadlines",
+     "description": "Upcoming and overdue deadlines across school, business and "
+                    "DECA, soonest first. Use for 'what's due', 'what's coming up'.",
+     "input_schema": {"type": "object", "properties": {
+         "domain": dict(_DOMAIN_ENUM, description="narrow to one world"),
+         "within_days": {"type": "integer"}}, "required": []}},
+    {"name": "store_status",
+     "description": "Shopify orders, fulfilment and low stock. Says plainly "
+                    "when the store is not connected instead of guessing.",
+     "input_schema": {"type": "object", "properties": {}, "required": []}},
     {"name": "brief_me",
-     "description": "Calendar, unread mail, what slipped, money outstanding.",
+     "description": "The daily brief: what is overdue, what is due soon, the "
+                    "diary, unread mail, and the state of the store.",
      "input_schema": {"type": "object", "properties": {}, "required": []}},
     {"name": "remember",
-     "description": "Write one fact to memory as a dated file. Use when the "
-                    "user asks, or tells you something still true in three "
-                    "months. Always say what was written.",
+     "description": "Write one fact to memory as a dated file. Use when asked, "
+                    "or when told something still true in three months. Always "
+                    "say what was written.",
      "input_schema": {"type": "object", "properties": {
          "fact": {"type": "string"},
          "tags": {"type": "array", "items": {"type": "string"}}},
          "required": ["fact"]}},
     {"name": "plan_day",
-     "description": "Five items maximum, ordered by what moves money.",
+     "description": "Five items maximum, ordered by what is most urgent across "
+                    "all three worlds. School breaks ties.",
      "input_schema": {"type": "object", "properties": {}, "required": []}},
 ]
 
@@ -423,17 +619,22 @@ TOOL_NAMES = [t["name"] for t in SCHEMA]
 def dispatch(name: str, args: dict, vault) -> dict:
     args = args or {}
     if name == "search_brain":
-        return search_brain(vault, args.get("query", ""))
+        return search_brain(vault, args.get("query", ""), args.get("domain"))
     if name == "research_web":
         return research_web(vault, args.get("query", ""))
     if name == "read_inbox":
         return read_inbox(vault, limit=int(args.get("limit", 12)),
                           unread_only=bool(args.get("unread_only", False)))
+    if name == "deadlines":
+        return deadlines(vault, args.get("domain"),
+                         int(args.get("within_days", 14)))
+    if name == "store_status":
+        return store_status(vault)
     if name == "brief_me":
         return brief_me(vault)
     if name == "remember":
         return remember(vault, args.get("fact", ""), args.get("tags"))
     if name == "plan_day":
         return plan_day(vault)
-    return {"spoken": f"I don't have a tool called {name}.",
+    return {"spoken": f"I have no tool called {name}, Sir.",
             "card": {"kind": "error", "tool": name}}
