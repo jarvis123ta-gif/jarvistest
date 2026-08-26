@@ -4,7 +4,7 @@ domain: business
 demo_price: $42.00
 demo_cost: $16.00
 demo_only: true
-date: 2026-01-01
+date: 2026-01-02
 ---
 
 # Minimal Desk Mat

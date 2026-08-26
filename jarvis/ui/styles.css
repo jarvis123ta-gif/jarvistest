@@ -249,3 +249,36 @@ html, body {
 ::-webkit-scrollbar { width: 7px; height: 7px; }
 ::-webkit-scrollbar-thumb { background: #202834; border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- control state ---------------------------------------------
+   JARVIS can drive the browser and the machine. Whether it currently
+   can must be readable at a glance, from across the room. */
+
+.badge.ctl { color: var(--ink-mute); background: rgba(255,255,255,.04);
+             border-color: var(--line); cursor: pointer; }
+.badge.ctl.acting { color: #061014; background: var(--accent);
+                    border-color: var(--accent); }
+.badge.ctl.halted { color: var(--bad); background: rgba(255,95,109,.12);
+                    border-color: rgba(255,95,109,.4); }
+
+.act.halt { color: var(--bad); border-color: rgba(255,95,109,.28); }
+.act.halt:hover { color: #fff; background: rgba(255,95,109,.22);
+                  border-color: var(--bad); }
+
+/* A hairline round the whole viewport while an action is in flight. */
+#actingFrame {
+  position: fixed; inset: 0; z-index: 9; pointer-events: none;
+  border: 2px solid var(--accent); border-radius: 2px; opacity: 0;
+  transition: opacity .18s ease;
+}
+#actingFrame.on { opacity: .55; }
+#actingFrame.halted { border-color: var(--bad); opacity: .8; }
+
+.actionrow { display: flex; gap: 8px; padding: 4px 0; font-size: 10.5px;
+             border-top: 1px solid var(--line-soft); }
+.actionrow .when { color: var(--ink-mute); font-variant-numeric: tabular-nums; }
+.actionrow .what { flex: 1 1 auto; color: var(--ink-dim); }
+.actionrow .from { color: var(--ink-mute); }
+.actionrow.refused .what { color: var(--bad); }
+
+@media (prefers-reduced-motion: reduce) { #actingFrame { transition: none; } }

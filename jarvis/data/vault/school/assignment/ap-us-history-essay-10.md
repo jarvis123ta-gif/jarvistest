@@ -2,14 +2,14 @@
 type: assignment
 domain: school
 course: AP US History
-due: 2026-08-26
+due: 2026-08-27
 status: in progress
 weight: homework
 ---
 
 # AP US History — essay 10
 
-Essay for [[AP US History]], due 2026-08-26.
+Essay for [[AP US History]], due 2026-08-27.
 
 Status: **in progress**.
 

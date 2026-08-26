@@ -2,7 +2,7 @@
 type: event
 domain: deca
 format: roleplay
-date: 2026-07-18
+date: 2026-07-19
 ---
 
 # Business Services Marketing Series

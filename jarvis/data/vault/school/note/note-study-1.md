@@ -1,7 +1,7 @@
 ---
 type: note
 domain: school
-date: 2026-06-03
+date: 2026-06-04
 ---
 
 # Note — study 1

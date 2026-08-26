@@ -2,7 +2,7 @@
 type: event
 domain: deca
 format: written
-date: 2026-06-18
+date: 2026-06-19
 ---
 
 # Business Growth Plan

@@ -3,7 +3,7 @@ type: course
 domain: school
 teacher: Okafor
 period: period 5
-date: 2026-02-25
+date: 2026-02-26
 ---
 
 # AP Chemistry

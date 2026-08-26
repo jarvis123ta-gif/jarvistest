@@ -4,7 +4,7 @@ domain: business
 demo_price: $26.00
 demo_cost: $9.80
 demo_only: true
-date: 2026-01-16
+date: 2026-01-17
 ---
 
 # Canvas Tote

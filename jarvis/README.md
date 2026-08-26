@@ -28,7 +28,7 @@ It is a person who happens to have tools, not a search box with a voice.
 the answer actually needs one, and every tool gives back two different things
 — one or two sentences said out loud, and the detail on a card on screen.
 
-Eight tools:
+Ten tools:
 
 | Tool | What it does |
 | --- | --- |
@@ -40,8 +40,79 @@ Eight tools:
 | `read_inbox` | Read-only mail, sorted by world, flagging who is already in your files. |
 | `research_web` | Look something up, then relate it to numbers of yours that actually exist. |
 | `remember` | Write one fact to a dated file, and say out loud what was written. |
+| `browser` | Drive Chrome: list tabs, read a page, navigate, click, fill, type, screenshot. |
+| `desktop` | Drive Windows: focus windows, click, type, press chords, scroll, capture the screen. |
 
 ---
+
+## Control — Chrome and the machine
+
+**This is the part that is not read-only.** JARVIS can drive your browser and,
+on Windows, your machine: navigate, click, fill fields, type, press key
+chords, move the mouse, capture the screen. That means it can send the email,
+place the order, delete the file.
+
+That was chosen deliberately. What follows is what stands between that power
+and a bad afternoon.
+
+### The origin rule
+
+**Only a principal can cause an action.** An action happens because Sai or
+Tanay asked for it. Text JARVIS *reads* — a web page, an email, a document,
+an order note — is data, and never becomes a command.
+
+This is enforced in code, not just asked for in the prompt. Every action
+routes through `control.guard()`, which refuses anything whose origin is not
+a principal:
+
+```
+>>> browser.click("Submit", origin=control.CONTENT)
+UntrustedOrigin: Refused to click: that instruction came from content, not
+from Sai or Tanay. Text inside pages, mail and files is data, not a command.
+```
+
+The guardrail suite proves this on seven separate action paths. It is the
+single most important thing in the project.
+
+### Stopping it
+
+Three ways, all instant:
+
+| | |
+| --- | --- |
+| **CTRL+ALT+Q** | Anywhere in Windows, even while the mouse is moving. This is the one that matters — when something else is driving the cursor, reaching a button on screen is exactly what you cannot do. |
+| **Esc** | In the JARVIS page. Stops the voice and the hands together. |
+| **Halt button** | Bottom right of the ask bar. |
+
+Halted, JARVIS can still read and still talk. It simply cannot act. The badge
+next to the wordmark turns red, and a red hairline frames the whole window,
+so the state is readable from across the room.
+
+### The action log
+
+Every action lands in `memory/actions.log`, one JSON line each, with a
+timestamp, the surface, what was done, and **where the instruction came
+from**. Right-click the Memory button to read it in the interface, or:
+
+```bash
+tail -f memory/actions.log
+```
+
+If something odd ever happens, that file says exactly what and why.
+
+### Attaching Chrome
+
+Chrome ignores `--remote-debugging-port` on your default profile — a
+deliberate Google security change since Chrome 136, not a bug. So JARVIS runs
+Chrome against its own profile folder:
+
+```bash
+python3 agent/browser.py launch      # starts Chrome with the port open
+python3 agent/browser.py tabs        # see what it can see
+```
+
+Log into your accounts once in that window; the profile persists. Nothing
+touches your normal Chrome profile.
 
 ## Connectors
 
@@ -55,7 +126,8 @@ class in `agent/connectors.py` and registering it; nothing else changes.
 | **Google Calendar** | Classes, deadlines, meetings, competitions | `calendar.readonly` |
 | **Shopify** | Products, orders, customers | `read_orders`, `read_products`, `read_customers` |
 
-**Do not grant a write or send scope.** Nothing in this project uses one, and
+These four stay read-only permanently — separately from the browser and
+desktop control above. **Do not grant a write or send scope.** Nothing in this project uses one, and
 the guardrail test asserts that every request to a user service is a GET. The
 single POST in the codebase is Google's OAuth token refresh, which mints a
 read token and touches no data.
@@ -134,20 +206,30 @@ one.
 
 ## Voice
 
-Speech in and speech out both go through OpenAI: `whisper-1` to transcribe,
-`tts-1` to speak. Swap the stack with one variable:
+`JARVIS_VOICE=auto` (the default) probes the machine, picks the best tier
+that actually works, and says which one is live on screen.
 
-```bash
-JARVIS_VOICE=openai      # default
-JARVIS_VOICE=elevenlabs  # scribe_v1 in, eleven turbo out
-JARVIS_VOICE=local       # whisper.cpp in, OS voice out — no cloud, no cost
-JARVIS_VOICE=none        # text only, and it says so on screen
-```
+| Tier | Speech in | Speech out | Needs |
+| --- | --- | --- | --- |
+| `openai` | `whisper-1` | `tts-1` | `OPENAI_API_KEY` |
+| `elevenlabs` | `scribe_v1` | eleven turbo | `ELEVENLABS_API_KEY` |
+| `local` | whisper.cpp | Windows built-in voice | free, private, no cloud |
+| `none` | — | — | says so on screen |
+
+**On Windows, speech-out already works with nothing installed** — the
+built-in SAPI voice, driven through PowerShell. Only speech-in needs
+whisper.cpp, and the probe tells you exactly what is missing and how to fix
+it. Pin a tier by naming it instead of `auto`.
+
+Audio reaches the server as **16 kHz mono WAV, encoded in the browser**. That
+is deliberate: whisper.cpp cannot read WebM/Opus without ffmpeg, and every
+cloud API accepts WAV — so one format serves every tier with nothing to
+install.
 
 **The browser's Web Speech API is deliberately not used.** It only exists in
 Chrome, it ships your audio to Google, and in Brave it is a stub that fails
-silently — you talk and nothing happens, with no error. Audio is captured with
-`MediaRecorder` and transcribed server-side instead, which works in every
+silently — you talk and nothing happens, with no error. Raw PCM is captured
+through Web Audio and transcribed server-side instead, which works in every
 browser and fails loudly.
 
 ### Turn-taking
@@ -167,7 +249,8 @@ talk to itself forever. Barge-in is explicit: the mic button, **Space**, or
 **Esc**.
 
 The level loop runs on `setInterval`, not `requestAnimationFrame`, because RAF
-stops dead in a backgrounded tab and the mic would go silently deaf.
+stops dead in a backgrounded tab and the mic would go silently deaf. Capture
+itself runs in the Web Audio callback, which keeps running regardless.
 
 ---
 
@@ -215,16 +298,21 @@ has no flag that suppresses the receipt.
 These are enforced in code, not just described in the prompt. Run:
 
 ```bash
-python3 data/guardrails_test.py
+python3 data/guardrails_test.py     # 48 checks
 ```
 
-- **Never send.** No email, message or invite. It drafts and waits. `smtplib`
-  and every send path are absent from the codebase, and the test checks.
-- **Never write to your folders or any connected service.** Read-only,
-  always. `vault.py` opens nothing for writing, and every connector request
-  against a user service is a GET. Writes go to `memory/` only, and
-  `memory.py` refuses any path that resolves outside it — including a fact
-  whose text contains `../`.
+- **Only a principal can cause an action.** Enforced on all seven action
+  paths across `browser.py` and `desktop.py`. Content that tries to act is
+  refused and logged as refused.
+- **Every action path is gated.** The suite counts `control.guard()` calls
+  per surface, so a new action that forgot the kill switch fails the build
+  rather than shipping invisible.
+- **The kill switch stops actions and nothing else.** Disarmed, reads still
+  work — proven by test.
+- **Never write to your folders.** The four connectors are read-only; every
+  request against them is a GET. `vault.py` opens nothing for writing. Writes
+  go to `memory/` only, and `memory.py` refuses any path that resolves
+  outside it — including a fact whose text contains `../`.
 - **Never write to memory silently.**
 - **Never spend.** Voice stops at `JARVIS_VOICE_CAP_USD` (default $0.50 per
   run) and says so rather than quietly running on.
@@ -292,6 +380,10 @@ jarvis/
 │   ├── tools.py      the six tools
 │   ├── data.py       THE ONLY FILE THAT TOUCHES REAL DATA
 │   ├── connectors.py Drive, Gmail, Calendar, Shopify — read-only, modular
+│   ├── browser.py    Chrome, via DevTools Protocol — reads AND acts
+│   ├── desktop.py    Windows mouse, keyboard, windows, screen — reads AND acts
+│   ├── control.py    kill switch, action log, origin rule
+│   ├── wsock.py      a minimal WebSocket client, so CDP needs no package
 │   ├── voice.py      speech in and out, provider-swappable
 │   ├── memory.py     writes to memory/ and nowhere else
 │   └── prompt.md     the system prompt
@@ -316,6 +408,8 @@ jarvis/
 | `POST /api/listen` | raw audio bytes → transcript |
 | `POST /api/speak` | `{text}` → mp3 bytes |
 | `POST /api/reindex` | rebuild the index |
+| `GET /api/actions` | the action log, newest first |
+| `POST /api/control` | `{armed: false}` halts everything; `{armed: true}` re-arms |
 
 The server binds `127.0.0.1` only.
 

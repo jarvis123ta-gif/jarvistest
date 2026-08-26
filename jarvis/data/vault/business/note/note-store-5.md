@@ -1,7 +1,7 @@
 ---
 type: note
 domain: business
-date: 2026-06-29
+date: 2026-06-30
 ---
 
 # Note — store 5

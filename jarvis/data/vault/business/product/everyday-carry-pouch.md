@@ -4,7 +4,7 @@ domain: business
 demo_price: $34.00
 demo_cost: $12.50
 demo_only: true
-date: 2026-01-06
+date: 2026-01-07
 ---
 
 # Everyday Carry Pouch

@@ -3,7 +3,7 @@ type: course
 domain: school
 teacher: Whitfield
 period: period 3
-date: 2026-02-25
+date: 2026-02-26
 ---
 
 # AP US History

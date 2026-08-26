@@ -4,7 +4,7 @@ domain: business
 demo_price: $19.00
 demo_cost: $6.40
 demo_only: true
-date: 2026-06-30
+date: 2026-07-01
 ---
 
 # Cable Organiser Set

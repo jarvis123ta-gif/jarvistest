@@ -9,3 +9,9 @@ data/calendar.live.json
 data/*.live.json
 memory/*.md
 !memory/.gitkeep
+
+# JARVIS's own Chrome profile — logged-in sessions, cookies, never committed.
+chrome-profile/
+
+# The action log is a record of what was done on this machine.
+memory/actions.log

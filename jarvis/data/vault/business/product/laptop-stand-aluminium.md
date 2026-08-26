@@ -4,7 +4,7 @@ domain: business
 demo_price: $68.00
 demo_cost: $29.50
 demo_only: true
-date: 2026-08-02
+date: 2026-08-03
 ---
 
 # Laptop Stand — Aluminium

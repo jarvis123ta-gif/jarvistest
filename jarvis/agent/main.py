@@ -29,8 +29,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import browser                  # noqa: E402
 import connectors               # noqa: E402
+import control                  # noqa: E402
 import data                     # noqa: E402
+import desktop                  # noqa: E402
 import memory                   # noqa: E402
 import tools                    # noqa: E402
 import voice                    # noqa: E402
@@ -148,6 +151,12 @@ DIRECT = [
      "remember", {}),
     (re.compile(r"\b(look ?up|search the web|google|what does it cost|"
                 r"market rate|going rate|price of)\b", re.I), "research_web", {}),
+    (re.compile(r"\b(tabs?|what.s open|browser|chrome|this page|that page|"
+                r"read the page)\b", re.I), "browser", {}),
+    (re.compile(r"\b(screen|windows?|desktop|what.s on my screen|"
+                r"screenshot)\b", re.I), "desktop", {}),
+    (re.compile(r"\b(stop|halt|freeze|kill switch|hands off|disarm)\b", re.I),
+     "__halt", {}),
 ]
 
 SMALL_TALK = {
@@ -180,6 +189,18 @@ def fallback_route(text: str, vault: Vault) -> dict:
             if name in ("deadlines", "search_brain"):
                 dom = tools.guess_domain(t)
                 args = dict(args, **({"domain": dom} if dom else {}))
+            if name == "__halt":
+                control.disarm("asked to stop")
+                return {"mode": "control", "tool": None,
+                        "spoken": "Stopped, Sir. Hands off everything until you re-arm.",
+                        "card": {"kind": "halted", "surface": "all",
+                                 "control": control.status()}}
+            if name == "browser":
+                args = {"action": ("read" if re.search(r"read|this page|that page", t, re.I)
+                                   else "tabs")}
+            if name == "desktop":
+                args = {"action": ("screenshot" if re.search(r"screen ?shot|see my screen", t, re.I)
+                                   else "windows")}
             res = tools.dispatch(name, args, vault)
             return {"mode": "tool", "tool": name,
                     "spoken": res["spoken"], "card": res["card"]}
@@ -347,6 +368,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"path": v.shortest_path(q.get("a", ""), q.get("b", ""))})
             if path == "/api/memory":
                 return self._json({"facts": memory.recall(50), **memory.stats()})
+            if path == "/api/actions":
+                return self._json({"actions": control.recent(60),
+                                   **control.status()})
             return self.serve_static(path)
         except Exception:                                   # noqa: BLE001
             traceback.print_exc()
@@ -369,6 +393,9 @@ class Handler(BaseHTTPRequestHandler):
                       "types": v.counts_by_type() if v else {},
                       "domains": v.counts_by_domain() if v else {}},
             "connectors": connectors.status_all(),
+            "control": {**control.status(),
+                        "browser": browser.status(),
+                        "desktop": desktop.status()},
             "memory": memory.stats(),
         }
 
@@ -408,6 +435,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, res["audio"], res["mime"],
                                   {"X-Voice-Provider": res["provider"]})
 
+            if path == "/api/control":
+                payload = json.loads(self._body() or b"{}")
+                want = str(payload.get("armed", "")).lower()
+                if want in ("false", "0", "no", "off"):
+                    return self._json(control.disarm(
+                        payload.get("reason", "stopped from the interface")))
+                if want in ("true", "1", "yes", "on"):
+                    return self._json(control.arm())
+                return self._json(control.status())
+
             if path == "/api/reindex":
                 v = build_vault()
                 return self._json({"ok": True, "notes": len(v.notes),
@@ -434,6 +471,15 @@ def main() -> None:
     if not st["configured"]:
         print("!! no roots configured — set REAL_ROOTS in agent/data.py "
               "or JARVIS_SCHOOL_ROOTS / JARVIS_BUSINESS_ROOTS / JARVIS_DECA_ROOTS")
+    b = browser.status()
+    print(f"chrome: {'attached on ' + str(b['port']) if b['connected'] else 'NOT ATTACHED'}"
+          + ("" if b["connected"] else f" — {b['reason'][:90]}"))
+    d = desktop.status()
+    print(f"desktop:{' available ' + str(d.get('screen')) if d['connected'] else ' UNAVAILABLE — ' + d['reason']}")
+    if d["connected"]:
+        pk = desktop.start_panic_key()
+        print(f"panic:  {pk.get('combo', 'unavailable')} disarms everything")
+    print(f"control: armed={control.armed()}   log={control.LOG}")
     for c in connectors.status_all():
         mark = "ok" if c["connected"] else "NOT CONNECTED"
         print(f"conn:   {c['label']:<17} {mark}"

@@ -2,7 +2,7 @@
 type: event
 domain: deca
 format: written
-date: 2026-07-18
+date: 2026-07-19
 ---
 
 # Integrated Marketing Campaign — Product

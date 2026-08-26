@@ -4,7 +4,7 @@ domain: business
 demo_price: $9.00
 demo_cost: $2.10
 demo_only: true
-date: 2025-12-27
+date: 2025-12-28
 ---
 
 # Sticker Pack

@@ -3,7 +3,7 @@ type: course
 domain: school
 teacher: Perez
 period: period 2
-date: 2026-02-25
+date: 2026-02-26
 ---
 
 # AP Calculus BC

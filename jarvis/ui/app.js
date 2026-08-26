@@ -1,8 +1,10 @@
 /* app.js — wiring: state, voice, cards.
  *
- * Speech never touches the browser's Web Speech API. Audio is captured
- * with MediaRecorder and transcribed server-side, which works in every
- * browser instead of only Chrome, and fails loudly instead of silently.
+ * Speech never touches the browser's Web Speech API. Raw PCM is captured
+ * through Web Audio, encoded as 16 kHz mono WAV here, and transcribed
+ * server-side — which works in every browser instead of only Chrome, fails
+ * loudly instead of silently, and hands local whisper.cpp a format it can
+ * read without ffmpeg.
  */
 
 'use strict';
@@ -19,14 +21,18 @@ const MIN_SPEECH_MS   = 350;    // ignore a cough
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 
+const TARGET_RATE = 16000;   // what whisper.cpp and every cloud API want
+
 const S = {
   session: 'web-' + Math.random().toString(36).slice(2, 9),
   state: 'idle',            // idle | listening | thinking | speaking
   micOn: false, muted: false,
   stream: null, ctx: null, analyser: null, buf: null,
-  recorder: null, chunks: [], levelTimer: null,
+  source: null, proc: null, pcm: [], capturing: false,
+  levelTimer: null,
   lastVoice: 0, speechStart: 0, heardSpeech: false,
   audio: null, level: 0, status: null,
+  armed: true, acting: false,
 };
 
 /* ================================================================ state */
@@ -92,6 +98,45 @@ async function loadStatus() {
   if (off.length) {
     alertLoud('Not connected: ' + off.map(c => c.label).join(', ') +
               ' — JARVIS will say so rather than guess.', 'warn');
+  }
+
+  const ctl = st.control || {};
+  paintControl(ctl.armed !== false);
+  if (ctl.browser && !ctl.browser.connected) {
+    alertLoud('Chrome not attached — ' + ctl.browser.reason.slice(0, 150), 'warn');
+  }
+  if (ctl.desktop && !ctl.desktop.connected) {
+    alertLoud('Desktop control off — ' + ctl.desktop.reason, 'warn');
+  }
+}
+
+/* ---- control: armed, halted, acting ---------------------------- */
+
+function paintControl(armed) {
+  S.armed = armed;
+  const b = $('#controlBadge');
+  b.textContent = armed ? (S.acting ? 'acting' : 'armed') : 'halted';
+  b.classList.toggle('halted', !armed);
+  b.classList.toggle('acting', armed && S.acting);
+  const f = $('#actingFrame');
+  f.classList.toggle('on', armed && S.acting);
+  f.classList.toggle('halted', !armed);
+  $('#haltBtn').textContent = armed ? 'Halt' : 'Re-arm';
+}
+
+async function setArmed(armed, reason) {
+  try {
+    const r = await (await fetch('/api/control', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ armed, reason: reason || 'from the interface' }),
+    })).json();
+    paintControl(r.armed !== false);
+    $('#spoken').classList.remove('hint');
+    $('#spoken').textContent = armed
+      ? 'Re-armed, Sir. I can act again.'
+      : 'Stopped, Sir. Hands off everything until you re-arm.';
+  } catch (e) {
+    alertLoud('Could not reach the kill switch: ' + e.message);
   }
 }
 
@@ -190,6 +235,7 @@ async function ask(text) {
   $('#spoken').textContent = '…';
   $('#card').innerHTML = '';
   setState('thinking');
+  S.acting = true; paintControl(S.armed);
 
   let r;
   try {
@@ -200,9 +246,13 @@ async function ask(text) {
     })).json();
   } catch (e) {
     $('#spoken').textContent = 'The server did not answer, Sir.';
+    S.acting = false; paintControl(S.armed);
     setState('idle');
     return;
   }
+  S.acting = false;
+  if (r.card && r.card.kind === 'halted') paintControl(false);
+  else paintControl(S.armed);
 
   $('#spoken').textContent = r.spoken || '(nothing said)';
   const cards = r.cards && r.cards.length ? r.cards : (r.card ? [r.card] : []);
@@ -229,6 +279,11 @@ function renderCard(c) {
   switch (c.kind) {
     case 'search':   return cardSearch(c);
     case 'deadlines':return cardDeadlines(c);
+    case 'browser':  return cardBrowser(c);
+    case 'desktop':  return cardDesktop(c);
+    case 'halted':   return cardHalted(c);
+    case 'refused':  return cardRefused(c);
+    case 'actions':  return cardActions(c);
     case 'store':    return cardStore(c);
     case 'research': return cardResearch(c);
     case 'inbox':    return cardInbox(c);
@@ -291,6 +346,67 @@ function cardDeadlines(c) {
     `<em class="file" data-id="${i.id}">${esc(i.what)}</em>
      <br><span class="muted">${esc(i.when)} · ${esc(i.due)} · ${esc(i.status)}</span>`)).join('');
   return it + `<div class="qual">${c.overdue} overdue of ${c.total}. ${esc(c.ordering || '')}. ${esc(c.note || '')}</div>`;
+}
+
+function cardBrowser(c) {
+  if (c.connected === false) return `<div class="flag">${esc(c.note)}</div>`;
+  if (c.image) return `<img src="${c.image}" alt="Screenshot of the tab"
+      style="width:100%;border-radius:4px;border:1px solid var(--line)">`;
+  if (c.tabs) {
+    return c.tabs.map(t => row('tab',
+      `<em>${esc(t.title || 'untitled')}</em><br><span class="muted">${esc(t.url)}</span>`)).join('');
+  }
+  if (c.title || c.url) {
+    const links = (c.links || []).map(l => row('link',
+      `${esc(l.text)}<br><span class="muted">${esc(l.href)}</span>`)).join('');
+    const fields = (c.fields || []).map(f => row('field',
+      `<em>${esc(f.label || f.name || f.id || f.tag)}</em>
+       <span class="muted">${esc(f.type || f.tag)}</span>
+       ${f.value ? `<br><span class="muted">${esc(f.value)}</span>` : ''}`)).join('');
+    const buttons = (c.buttons || []).map(b => row('button', esc(b.text))).join('');
+    const warn = (c.warnings || []).map(w =>
+      `<div class="flag">This page contains an instruction aimed at me:
+        “${esc(w.quote)}” — ${esc(w.handling)}</div>`).join('');
+    return row('page', `<em>${esc(c.title)}</em><br><span class="muted">${esc(c.url)}</span>`) +
+      (c.text ? row('text', `<span class="muted">${esc(c.text.slice(0, 700))}</span>`) : '') +
+      fields + buttons + links + warn;
+  }
+  return row(c.action || 'browser', c.ok ? esc(JSON.stringify(c).slice(0, 300))
+                                         : `<span class="muted">${esc(c.reason || '')}</span>`);
+}
+
+function cardDesktop(c) {
+  if (c.connected === false) return `<div class="flag">${esc(c.note)}</div>`;
+  if (c.image) return `<img src="${c.image}" alt="Screenshot of the screen"
+      style="width:100%;border-radius:4px;border:1px solid var(--line)">`;
+  if (c.windows) {
+    return c.windows.map(w => row(w.focused ? 'focused' : 'window',
+      esc(w.title))).join('');
+  }
+  return row(c.action || 'desktop', c.ok
+    ? esc(JSON.stringify({ ...c, kind: undefined }).slice(0, 240))
+    : `<span class="muted">${esc(c.reason || '')}</span>`);
+}
+
+function cardHalted(c) {
+  const s = c.control || {};
+  return `<div class="flag">Halted — ${esc(s.reason || 'stopped')}.
+    Nothing will be clicked or typed until you re-arm.</div>` +
+    row('actions so far', esc(s.actions || 0)) + row('log', esc(s.log || ''));
+}
+
+function cardRefused(c) {
+  return `<div class="flag">Refused on the ${esc(c.surface)}: ${esc(c.why)}</div>`;
+}
+
+function cardActions(c) {
+  if (!c.actions || !c.actions.length) return row('log', 'nothing done yet, Sir');
+  return c.actions.map(a =>
+    `<div class="actionrow${a.ok ? '' : ' refused'}">
+       <span class="when">${esc((a.at || '').slice(11, 19))}</span>
+       <span class="what">${esc(a.surface)} · ${esc(a.action)}</span>
+       <span class="from">${esc(a.origin)}</span>
+     </div>`).join('');
 }
 
 function cardStore(c) {
@@ -415,11 +531,24 @@ async function micToggle() {
     return;
   }
   S.ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const src = S.ctx.createMediaStreamSource(S.stream);
+  S.source = S.ctx.createMediaStreamSource(S.stream);
   S.analyser = S.ctx.createAnalyser();
   S.analyser.fftSize = 1024;
   S.buf = new Uint8Array(S.analyser.fftSize);
-  src.connect(S.analyser);
+  S.source.connect(S.analyser);
+
+  S.proc = S.ctx.createScriptProcessor(4096, 1, 1);
+  S.proc.onaudioprocess = e => {
+    if (!S.capturing) return;                 // genuinely deaf while speaking
+    S.pcm.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+  S.source.connect(S.proc);
+  // A zero-gain sink: some browsers will not run the processor unless the
+  // graph reaches a destination, but nothing should actually be audible.
+  const mute = S.ctx.createGain();
+  mute.gain.value = 0;
+  S.proc.connect(mute);
+  mute.connect(S.ctx.destination);
 
   S.micOn = true;
   S.levelTimer = setInterval(levelTick, LEVEL_TICK_MS);
@@ -430,24 +559,26 @@ function micOff() {
   S.micOn = false;
   stopRecording();
   clearInterval(S.levelTimer); S.levelTimer = null;
+  if (S.proc) { S.proc.onaudioprocess = null; S.proc.disconnect(); }
+  if (S.source) S.source.disconnect();
   if (S.stream) S.stream.getTracks().forEach(t => t.stop());
   if (S.ctx) S.ctx.close();
-  S.stream = S.ctx = S.analyser = null;
+  S.stream = S.ctx = S.analyser = S.source = S.proc = null;
   S.level = 0; paintBars(0);
   caption('');
   setState('idle');
 }
 
+/* Capture raw PCM rather than MediaRecorder's WebM/Opus. Local whisper
+   cannot read Opus without ffmpeg, and every cloud API accepts WAV, so one
+   format serves every tier with nothing to install. The audio callback also
+   keeps running in a backgrounded tab, which MediaRecorder timeslices do
+   not reliably do. */
+
 function startRecording() {
-  if (!S.micOn || !S.stream || S.recorder) return;
-  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    ? 'audio/webm;codecs=opus'
-    : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
-  S.chunks = [];
-  S.recorder = new MediaRecorder(S.stream, mime ? { mimeType: mime } : undefined);
-  S.recorder.ondataavailable = e => e.data.size && S.chunks.push(e.data);
-  S.recorder.onstop = onTurnEnd;
-  S.recorder.start(200);
+  if (!S.micOn || !S.ctx || S.capturing) return;
+  S.pcm = [];
+  S.capturing = true;
   S.heardSpeech = false;
   S.speechStart = 0;
   S.lastVoice = performance.now();
@@ -456,15 +587,58 @@ function startRecording() {
 }
 
 function stopRecording() {
-  if (S.recorder && S.recorder.state !== 'inactive') {
-    S.recorder.onstop = null;          // discard, do not transcribe
-    try { S.recorder.stop(); } catch (e) { /* already gone */ }
-  }
-  S.recorder = null;
+  S.capturing = false;
+  S.pcm = [];
 }
 
 function resumeListening() {
-  if (S.micOn && !S.recorder) setTimeout(startRecording, 220);
+  if (S.micOn && !S.capturing) setTimeout(startRecording, 220);
+}
+
+function endTurn() {
+  if (!S.capturing) return;
+  S.capturing = false;
+  caption('transcribing…');
+  setState('thinking');
+  onTurnEnd(flushWav());
+}
+
+function flushWav() {
+  const total = S.pcm.reduce((n, c) => n + c.length, 0);
+  const merged = new Float32Array(total);
+  let at = 0;
+  for (const c of S.pcm) { merged.set(c, at); at += c.length; }
+  S.pcm = [];
+  return encodeWav(downsample(merged, S.ctx.sampleRate, TARGET_RATE), TARGET_RATE);
+}
+
+function downsample(input, from, to) {
+  if (to >= from) return input;
+  const ratio = from / to;
+  const out = new Float32Array(Math.floor(input.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const start = Math.floor(i * ratio), end = Math.min(Math.floor((i + 1) * ratio), input.length);
+    let sum = 0;
+    for (let j = start; j < end; j++) sum += input[j];
+    out[i] = sum / Math.max(end - start, 1);
+  }
+  return out;
+}
+
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const str = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); str(8, 'WAVE');
+  str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return new Blob([buf], { type: 'audio/wav' });
 }
 
 function levelTick() {
@@ -478,7 +652,7 @@ function levelTick() {
   S.level = Math.sqrt(sum / S.buf.length);
   paintBars(S.level);
 
-  if (S.state !== 'listening' || !S.recorder) return;
+  if (S.state !== 'listening' || !S.capturing) return;
   const now = performance.now();
   if (S.level > LEVEL_THRESHOLD) {
     S.lastVoice = now;
@@ -490,24 +664,12 @@ function levelTick() {
   }
 }
 
-function endTurn() {
-  if (!S.recorder) return;
-  caption('transcribing…');
-  setState('thinking');
-  try { S.recorder.stop(); } catch (e) { /* nothing to stop */ }
-}
-
-async function onTurnEnd() {
-  const blob = new Blob(S.chunks, { type: S.chunks[0] ? S.chunks[0].type : 'audio/webm' });
-  S.recorder = null;
-  if (blob.size < 1200) { caption(''); resumeListening(); return; }
-
+async function onTurnEnd(blob) {
+  if (!blob || blob.size < 2000) { caption(''); resumeListening(); return; }
   let out;
   try {
     const res = await fetch('/api/listen', {
-      method: 'POST',
-      headers: { 'content-type': blob.type || 'audio/webm' },
-      body: blob,
+      method: 'POST', headers: { 'content-type': 'audio/wav' }, body: blob,
     });
     out = await res.json();
   } catch (e) {
@@ -621,6 +783,15 @@ function wire() {
     $('#muteBtn').textContent = S.muted ? 'Muted' : 'Mute';
     if (S.muted) bargeIn();
   };
+  $('#haltBtn').onclick = () => setArmed(!S.armed);
+  $('#controlBadge').onclick = () => setArmed(!S.armed);
+  $('#memBtn').oncontextmenu = async e => {
+    e.preventDefault();
+    const a = await (await fetch('/api/actions')).json();
+    $('#spoken').classList.remove('hint');
+    $('#spoken').textContent = `${a.actions.length} actions logged, Sir.`;
+    $('#card').innerHTML = renderCard({ kind: 'actions', actions: a.actions });
+  };
   $('#memBtn').onclick = async () => {
     const m = await (await fetch('/api/memory')).json();
     $('#spoken').classList.remove('hint');
@@ -642,8 +813,10 @@ function wire() {
     if (e.target === $('#ask')) return;
     if (e.code === 'Space') { e.preventDefault(); micToggle(); }
     if (e.key === 'Escape') {
+      // Esc is the panic key in the page: it stops the voice AND the hands.
       bargeIn(); Graph.clearHighlight();
       if (S.micOn) micOff();
+      if (S.armed) setArmed(false, 'Esc pressed');
     }
   });
 

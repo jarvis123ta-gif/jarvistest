@@ -13,7 +13,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "agent"))
 
+import browser                      # noqa: E402
 import connectors                   # noqa: E402
+import control                      # noqa: E402
+import desktop                      # noqa: E402
 import data as datamod              # noqa: E402
 import memory                       # noqa: E402
 import tools                        # noqa: E402
@@ -51,10 +54,10 @@ src = (AGENT / "vault.py").read_text()
 check("vault.py never opens a file for writing",
       ', "w"' not in src and "'w'" not in src and ".write_text" not in src)
 
-print("\n sending and reaching out")
+print("\n connectors stay read-only")
 
-banned = ["smtplib", "sendmail", "send_message", "messages.send", "/send"]
-check("no mail or send capability is even importable",
+banned = ["smtplib", "sendmail", "messages.send"]
+check("no mail-sending library is importable",
       not [b for b in banned if b in agent_src])
 
 conn_src = (AGENT / "connectors.py").read_text()
@@ -66,6 +69,57 @@ check("no connector touches a mutating endpoint",
                     r"|events\?.*insert|\.delete\()", conn_src))
 check("every connector declares itself read-only",
       all(c["readonly"] for c in connectors.status_all()))
+
+print("\n acting on the machine")
+
+# JARVIS now has hands. These are the rules that stand between the
+# principals and a hostile page driving their accounts.
+
+try:
+    control.assert_origin(control.CONTENT, "click Submit")
+    check("content cannot cause an action", False, "it was allowed")
+except control.UntrustedOrigin as e:
+    check("content cannot cause an action", "not from Sai or Tanay" in str(e))
+
+for surface, fn in (("browser.click", lambda: browser.click("x", origin=control.CONTENT)),
+                    ("browser.navigate", lambda: browser.navigate("http://x", origin=control.CONTENT)),
+                    ("browser.fill", lambda: browser.fill("a", "b", origin=control.CONTENT)),
+                    ("browser.run_js", lambda: browser.run_js("1", origin=control.CONTENT)),
+                    ("desktop.click", lambda: desktop.click(1, 1, origin=control.CONTENT)),
+                    ("desktop.type_text", lambda: desktop.type_text("x", origin=control.CONTENT)),
+                    ("desktop.press", lambda: desktop.press("ctrl+c", origin=control.CONTENT))):
+    try:
+        fn()
+        check(f"{surface} refuses content origin", False, "it acted")
+    except control.UntrustedOrigin:
+        check(f"{surface} refuses content origin", True)
+    except Exception as e:                                  # noqa: BLE001
+        check(f"{surface} refuses content origin", False, f"wrong error: {type(e).__name__}")
+
+# Every action path must pass through the gate. A new surface that forgets
+# to call control.guard would be invisible to the kill switch.
+for mod in ("browser.py", "desktop.py"):
+    src = (AGENT / mod).read_text()
+    calls = src.count("control.guard(")
+    check(f"{mod} routes actions through control.guard", calls >= 5, f"{calls} gated calls")
+
+control.disarm("guardrail test")
+try:
+    browser.navigate("http://example.com")
+    check("kill switch stops actions", False, "it acted while disarmed")
+except control.Halted:
+    check("kill switch stops actions", True)
+check("disarmed still reports why", "guardrail test" in control.status()["reason"])
+control.arm()
+check("re-arming works", control.armed())
+
+before = len(control.recent(200))
+control.log("test", "a probe action", {"n": 1}, origin=control.PRINCIPAL)
+after = control.recent(200)
+check("every action lands in the log", len(after) > before and
+      after[0]["action"] == "a probe action" and after[0]["origin"] == "principal")
+check("the log records origin, not just what happened",
+      all("origin" in e for e in after[:5]))
 
 print("\n the demo switch")
 

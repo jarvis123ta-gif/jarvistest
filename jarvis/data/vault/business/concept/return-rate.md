@@ -1,7 +1,7 @@
 ---
 type: concept
 domain: business
-date: 2026-02-27
+date: 2026-02-28
 ---
 
 # Return rate

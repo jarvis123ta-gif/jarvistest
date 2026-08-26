@@ -1,7 +1,7 @@
 ---
 type: prep
 domain: deca
-date: 2026-07-31
+date: 2026-08-01
 ---
 
 # Presentation rehearsal

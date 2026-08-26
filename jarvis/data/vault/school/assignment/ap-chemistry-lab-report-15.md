@@ -2,14 +2,14 @@
 type: assignment
 domain: school
 course: AP Chemistry
-due: 2026-08-26
+due: 2026-08-27
 status: in progress
 weight: homework
 ---
 
 # AP Chemistry — lab report 15
 
-Lab report for [[AP Chemistry]], due 2026-08-26.
+Lab report for [[AP Chemistry]], due 2026-08-27.
 
 Status: **in progress**.
 

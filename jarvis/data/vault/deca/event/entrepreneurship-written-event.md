@@ -2,7 +2,7 @@
 type: event
 domain: deca
 format: written
-date: 2026-06-08
+date: 2026-06-09
 ---
 
 # Entrepreneurship Written Event

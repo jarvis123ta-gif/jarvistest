@@ -1,7 +1,7 @@
 ---
 type: concept
 domain: business
-date: 2026-05-24
+date: 2026-05-25
 ---
 
 # Ad spend payback

@@ -2,14 +2,14 @@
 type: assignment
 domain: school
 course: AP Chemistry
-due: 2026-08-25
+due: 2026-08-26
 status: in progress
 weight: major
 ---
 
 # AP Chemistry — essay 13
 
-Essay for [[AP Chemistry]], due 2026-08-25.
+Essay for [[AP Chemistry]], due 2026-08-26.
 
 Status: **in progress**.
 

@@ -1,7 +1,7 @@
 ---
 type: sop
 domain: business
-date: 2026-05-19
+date: 2026-05-20
 status: current
 ---
 

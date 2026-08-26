@@ -4,7 +4,7 @@ domain: business
 demo_price: $52.00
 demo_cost: $21.00
 demo_only: true
-date: 2026-03-12
+date: 2026-03-13
 ---
 
 # Travel Tech Case

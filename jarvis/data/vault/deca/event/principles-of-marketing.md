@@ -2,7 +2,7 @@
 type: event
 domain: deca
 format: roleplay
-date: 2026-06-06
+date: 2026-06-07
 ---
 
 # Principles of Marketing

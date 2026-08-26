@@ -1,7 +1,7 @@
 ---
 type: concept
 domain: business
-date: 2026-03-26
+date: 2026-03-27
 ---
 
 # Restock threshold
