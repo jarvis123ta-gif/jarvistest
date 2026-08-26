@@ -11,7 +11,8 @@ python3 agent/main.py        # http://localhost:8720
 ```
 
 That is the whole install. It runs on a clean machine with Python 3.10+ and
-nothing else.
+nothing else — including Windows, which ships no IANA timezone database;
+`agent/tz.py` carries the US DST rules so `tzdata` is not needed.
 
 ---
 
@@ -384,6 +385,7 @@ jarvis/
 │   ├── desktop.py    Windows mouse, keyboard, windows, screen — reads AND acts
 │   ├── control.py    kill switch, action log, origin rule
 │   ├── wsock.py      a minimal WebSocket client, so CDP needs no package
+│   ├── tz.py         timezones without tzdata, for Windows
 │   ├── voice.py      speech in and out, provider-swappable
 │   ├── memory.py     writes to memory/ and nowhere else
 │   └── prompt.md     the system prompt

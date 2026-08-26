@@ -22,10 +22,13 @@ import random
 import shutil
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "agent"))
+import tz as _tz                                          # noqa: E402
 
 SEED = 1974
-TZ = ZoneInfo("America/Chicago")
+TZ = _tz.get("America/Chicago")
 HERE = Path(__file__).resolve().parent
 VAULT = HERE / "vault"
 

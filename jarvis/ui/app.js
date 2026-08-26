@@ -100,6 +100,10 @@ async function loadStatus() {
               ' — JARVIS will say so rather than guess.', 'warn');
   }
 
+  if (st.timezone && st.timezone.fallback) {
+    alertLoud('Clock: ' + st.timezone.fallback, 'warn');
+  }
+
   const ctl = st.control || {};
   paintControl(ctl.armed !== false);
   if (ctl.browser && !ctl.browser.connected) {

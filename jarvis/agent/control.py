@@ -23,11 +23,11 @@ from __future__ import annotations
 import json
 import threading
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
+import tz as _tz
 from data import MEMORY_DIR, TIMEZONE
 
-TZ = ZoneInfo(TIMEZONE)
+TZ = _tz.get(TIMEZONE)
 LOG = MEMORY_DIR / "actions.log"
 
 # Where an instruction came from. Only PRINCIPAL may cause an action.

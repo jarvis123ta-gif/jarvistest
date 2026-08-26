@@ -36,6 +36,7 @@ import data                     # noqa: E402
 import desktop                  # noqa: E402
 import memory                   # noqa: E402
 import tools                    # noqa: E402
+import tz                       # noqa: E402
 import voice                    # noqa: E402
 from vault import Vault         # noqa: E402
 
@@ -393,6 +394,8 @@ class Handler(BaseHTTPRequestHandler):
                       "types": v.counts_by_type() if v else {},
                       "domains": v.counts_by_domain() if v else {}},
             "connectors": connectors.status_all(),
+            "timezone": {"name": data.TIMEZONE,
+                         "fallback": tz.fallback_note()},
             "control": {**control.status(),
                         "browser": browser.status(),
                         "desktop": desktop.status()},
@@ -488,6 +491,9 @@ def main() -> None:
     vs = voice.status()
     print(f"voice:  {vs['provider']}" + ("" if vs["ok"] else f" — OFF: {vs['reason']}"))
     print(f"mode:   {data.mode_label()}   tz: {data.TIMEZONE}")
+    note = tz.fallback_note()
+    if note:
+        print(f"!! tz:  {note}")
     print(f"\n  http://localhost:{PORT}\n")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 

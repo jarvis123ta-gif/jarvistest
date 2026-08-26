@@ -25,7 +25,6 @@ import html
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import browser
 import connectors
@@ -33,9 +32,10 @@ import control
 import desktop
 import memory
 from control import PRINCIPAL
+import tz as _tz
 from data import TIMEZONE
 
-TZ = ZoneInfo(TIMEZONE)
+TZ = _tz.get(TIMEZONE)
 
 # A store order sitting unfulfilled for less than this is inside the normal
 # window, not a backlog. Saying otherwise out loud would be a fabricated
