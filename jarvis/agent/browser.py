@@ -50,26 +50,57 @@ WINDOWS_CHROME = [
     os.path.expandvars(r"%LOCALAPPDATA%\Chromium\Application\chrome.exe"),
 ]
 
-MAC_APPS = [
-    ("Google Chrome", "Google Chrome"),
-    ("Google Chrome Canary", "Google Chrome Canary"),
-    ("Brave Browser", "Brave Browser"),
-    ("Microsoft Edge", "Microsoft Edge"),
-    ("Chromium", "Chromium"),
-    ("Arc", "Arc"),
-    ("Vivaldi", "Vivaldi"),
-    ("Opera", "Opera"),
-]
+# Match on what the app IS, not what someone named it. A bundle may be
+# "Google Chrome.app", "chrome.app" or anything else, and the executable
+# inside rarely matches the folder, so both are discovered rather than
+# assumed.
+MAC_KEYWORDS = ("chrome", "chromium", "brave", "edge", "arc", "vivaldi",
+                "opera", "thorium")
+MAC_PREFERENCE = ("chrome", "chromium", "brave", "edge", "vivaldi", "arc")
+
+
+MAC_APP_DIRS = ["/Applications", os.path.expanduser("~/Applications"),
+                "/Applications/Utilities"]
 
 
 def _mac_candidates() -> list[str]:
-    out = []
-    for folder in ("/Applications", os.path.expanduser("~/Applications")):
-        for app, binary in MAC_APPS:
-            path = f"{folder}/{app}.app/Contents/MacOS/{binary}"
-            if os.path.isfile(path):
-                out.append(path)
-    return out
+    found: list[str] = []
+    for folder in MAC_APP_DIRS:
+        if not os.path.isdir(folder):
+            continue
+        try:
+            entries = os.listdir(folder)
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.endswith(".app"):
+                continue
+            low = entry.lower()
+            if not any(k in low for k in MAC_KEYWORDS):
+                continue
+            if "safari" in low:                  # no DevTools Protocol
+                continue
+            macos = os.path.join(folder, entry, "Contents", "MacOS")
+            if not os.path.isdir(macos):
+                continue
+            try:
+                inner = sorted(os.listdir(macos))
+            except OSError:
+                continue
+            for exe in inner:
+                path = os.path.join(macos, exe)
+                if os.path.isfile(path) and os.access(path, os.X_OK):
+                    found.append(path)
+                    break                        # one binary per bundle
+
+    def rank(path: str) -> int:
+        low = path.lower()
+        for i, k in enumerate(MAC_PREFERENCE):
+            if k in low:
+                return i
+        return len(MAC_PREFERENCE)
+
+    return sorted(found, key=rank)
 
 
 def _chrome_binary() -> str | None:
