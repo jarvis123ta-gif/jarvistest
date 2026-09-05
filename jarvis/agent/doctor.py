@@ -137,6 +137,18 @@ w, m = voice.find_whisper(), voice.find_whisper_model()
 row(OK if w else WARN, "whisper binary", w or "not found")
 row(OK if m else WARN, "whisper model", m or "no ggml-*.bin found")
 
+# ---------------------------------------------------------------- connectors
+
+section("connectors")
+import connectors                                           # noqa: E402
+for c in connectors.status_all():
+    row(OK if c["connected"] else WARN, c["label"].lower(),
+        (f"{c['mode']} — {', '.join(c['provides'])}" if c["connected"]
+         else c["reason"][:110]))
+if any(not c["connected"] for c in connectors.status_all()):
+    row(OK, "connect google", "python3 agent/setup_google.py  "
+                              "(Gmail, Calendar, Classroom, Drive, YouTube)")
+
 # ---------------------------------------------------------------- browser
 
 section("browser control")

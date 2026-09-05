@@ -145,6 +145,8 @@ class in `agent/connectors.py` and registering it; nothing else changes.
 | **Google Drive** | School files, documents, DECA materials | `drive.metadata.readonly` |
 | **Gmail** | School and business mail | `gmail.readonly` |
 | **Google Calendar** | Classes, deadlines, meetings, competitions | `calendar.readonly` |
+| **Google Classroom** | Coursework and real due dates | `classroom.*.readonly` |
+| **YouTube** | Your channel and video stats | `youtube.readonly` |
 | **Shopify** | Products, orders, customers | `read_orders`, `read_products`, `read_customers` |
 
 These four stay read-only permanently — separately from the browser and
@@ -152,6 +154,26 @@ desktop control above. **Do not grant a write or send scope.** Nothing in this p
 the guardrail test asserts that every request to a user service is a GET. The
 single POST in the codebase is Google's OAuth token refresh, which mints a
 read token and touches no data.
+
+### Connecting Google
+
+One command does the whole flow — Gmail, Calendar, Classroom, Drive and
+YouTube together:
+
+```bash
+python3 agent/setup_google.py
+```
+
+It prints the four minutes of Google Cloud Console clicking you have to do
+once, then opens the consent screen, catches the redirect on a local port,
+exchanges the code and writes the refresh token to `.env`. Existing values
+and comments in that file are preserved.
+
+**Classroom is the one that changes the most.** Coursework arrives with real
+due dates and a submitted/not-submitted state, so `deadlines` and `plan_day`
+stop depending on anyone having typed an assignment into a file. Items
+already turned in are dropped, and anything present both in Classroom and in
+your notes is listed once.
 
 **A connector that is not connected returns nothing, and says so.** It never
 returns a plausible-looking number. Ask about the store before Shopify is

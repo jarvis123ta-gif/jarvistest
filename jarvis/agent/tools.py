@@ -308,8 +308,36 @@ def read_inbox(vault, limit: int = 12, unread_only: bool = False) -> dict:
 
 # ------------------------------------------------------------------ 4. deadlines
 
-def _deadline_rows(vault) -> list[dict]:
+def _classroom_rows() -> list[dict]:
+    """Coursework straight from Classroom, in the same shape as the notes.
+
+    This is the difference between a deadline tracker and a deadline
+    tracker that has to be fed by hand.
+    """
+    res = connectors.get("classroom").coursework()
+    if not res.get("ok"):
+        return []
     rows = []
+    for it in res.get("items", []):
+        if it.get("submitted"):
+            continue
+        d = _days_until(it.get("due"))
+        if d is None or d > 45:
+            continue
+        rows.append({
+            "what": it["title"], "type": it.get("type", "assignment"),
+            "domain": "school", "due": it["due"], "days": d,
+            "when": _due_phrase(d), "status": "not turned in",
+            "file": it.get("course") or "Classroom", "id": it.get("id"),
+            "course": it.get("course"), "weight": None,
+            "source": "classroom", "link": it.get("link"),
+        })
+    return rows
+
+
+def _deadline_rows(vault) -> list[dict]:
+    rows = _classroom_rows()
+    seen = {(r["what"].lower(), r["due"]) for r in rows}
     for n in vault.notes.values():
         meta = n["meta"]
         due = meta.get("due") or (meta.get("date") if n["type"] == "test" else None)
@@ -319,11 +347,16 @@ def _deadline_rows(vault) -> list[dict]:
         status = (meta.get("status") or "").lower()
         if status in ("submitted", "done", "complete"):
             continue
+        key = (n["title"].lower(), str(due)[:10])
+        if key in seen:
+            continue                       # already have it from Classroom
+        seen.add(key)
         rows.append({
             "what": n["title"], "type": n["type"], "domain": n["domain"],
             "due": str(due)[:10], "days": d, "when": _due_phrase(d),
             "status": status or "open", "file": n["file"], "id": n["id"],
             "course": meta.get("course"), "weight": meta.get("weight"),
+            "source": "files",
         })
     rows.sort(key=lambda r: (r["days"], 0 if r["domain"] == "school" else 1))
     return rows
@@ -353,9 +386,11 @@ def deadlines(vault, domain: str | None = None, within_days: int = 14) -> dict:
         "card": {"kind": "deadlines", "items": rows[:14],
                  "overdue": len(overdue), "total": len(rows),
                  "window_days": within_days, "domain": domain,
+                 "from_classroom": sum(1 for r in rows
+                                       if r.get("source") == "classroom"),
                  "ordering": "soonest first; school breaks ties",
-                 "note": "Dates are Central Time, read from the files. "
-                         "Nothing here is inferred."},
+                 "note": "Dates are Central Time, read from your files and "
+                         "Google Classroom. Nothing here is inferred."},
     }
 
 
@@ -400,10 +435,17 @@ def store_status(vault) -> dict:
     if low:
         spoken += f" {len(low)} products low on stock."
 
+    yt = connectors.get("youtube").channel()
+    channel = yt.get("channel") if yt.get("ok") else None
+    if channel and not channel.get("hidden_subs"):
+        spoken += f" Channel is on {channel['subscribers']:,} subscribers."
+
     return {
         "spoken": spoken,
         "card": {"kind": "store", "connector": st, "connected": True,
                  "demo": demo,
+                 "youtube": channel,
+                 "videos": (yt.get("videos") or [])[:5] if yt.get("ok") else [],
                  "orders": rows[:12], "counts": {
                      "orders": len(rows), "unfulfilled": len(unfulfilled),
                      "inside_window": len(fresh), "backlog": len(backlog),

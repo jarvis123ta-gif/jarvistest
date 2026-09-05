@@ -38,6 +38,10 @@ GOOGLE_READ_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/classroom.courses.readonly",
+    "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
+    "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly",
+    "https://www.googleapis.com/auth/youtube.readonly",
 ]
 
 
@@ -247,6 +251,153 @@ class DriveConnector(_Google):
                     "spoken": "Drive did not answer, Sir."}
 
 
+class ClassroomConnector(_Google):
+    """Where school deadlines actually live, for most students.
+
+    Coursework comes with real due dates and a submission state, so
+    `deadlines` can stop depending on someone having typed the assignment
+    into a markdown file.
+    """
+
+    key = "classroom"
+    label = "Google Classroom"
+    domain = "school"
+    provides = ["courses", "coursework", "deadlines"]
+
+    def configured(self) -> tuple[bool, str]:
+        ok, why = super().configured()
+        if not ok:
+            return ok, why.replace("Google is not connected",
+                                   "Classroom is not connected")
+        return True, ""
+
+    def coursework(self, limit: int = 60) -> dict:
+        if _cfg.demo_mode():
+            return {"ok": True, "source": "demo", "courses": [], "items": [],
+                    "note": "In demo mode the local vault stands in for Classroom."}
+        ok, why = self.configured()
+        if not ok:
+            return self.unavailable("coursework")
+        try:
+            courses = (self._api(
+                "https://classroom.googleapis.com/v1/courses"
+                "?courseStates=ACTIVE&pageSize=50").get("courses") or [])
+
+            # Which items are already turned in, so finished work stops
+            # being reported as outstanding.
+            done: set[str] = set()
+            items: list[dict] = []
+            for c in courses:
+                cid = c.get("id")
+                work = (self._api(
+                    "https://classroom.googleapis.com/v1/courses/"
+                    f"{cid}/courseWork?pageSize=40").get("courseWork") or [])
+                try:
+                    subs = (self._api(
+                        "https://classroom.googleapis.com/v1/courses/"
+                        f"{cid}/courseWork/-/studentSubmissions"
+                        "?pageSize=200").get("studentSubmissions") or [])
+                    done |= {sb.get("courseWorkId") for sb in subs
+                             if sb.get("state") in ("TURNED_IN", "RETURNED")}
+                except Exception:                           # noqa: BLE001
+                    pass            # submissions can be refused per course
+
+                for w in work:
+                    d, t = w.get("dueDate"), w.get("dueTime") or {}
+                    due = (f"{d['year']:04d}-{d['month']:02d}-{d['day']:02d}"
+                           if d else None)
+                    items.append({
+                        "id": w.get("id"), "title": w.get("title"),
+                        "course": c.get("name"), "due": due,
+                        "due_time": (f"{t.get('hours', 0):02d}:"
+                                     f"{t.get('minutes', 0):02d}") if t else None,
+                        "link": w.get("alternateLink"),
+                        "points": w.get("maxPoints"),
+                        "type": (w.get("workType") or "assignment").lower(),
+                        "submitted": w.get("id") in done,
+                    })
+            items.sort(key=lambda i: (i["due"] or "9999-99-99"))
+            return {"ok": True, "source": "classroom",
+                    "courses": [{"id": c.get("id"), "name": c.get("name"),
+                                 "section": c.get("section")} for c in courses],
+                    "items": items[:limit]}
+        except Exception as e:                              # noqa: BLE001
+            return {"ok": False, "connector": self.key,
+                    "reason": f"Classroom failed: {e}",
+                    "spoken": "Classroom did not answer, Sir."}
+
+
+class YouTubeConnector(_Google):
+    """The channel side of the business."""
+
+    key = "youtube"
+    label = "YouTube"
+    domain = "business"
+    provides = ["channel", "videos"]
+
+    def configured(self) -> tuple[bool, str]:
+        ok, why = super().configured()
+        if not ok:
+            return ok, why.replace("Google is not connected",
+                                   "YouTube is not connected")
+        return True, ""
+
+    def channel(self, videos: int = 8) -> dict:
+        if _cfg.demo_mode():
+            return {"ok": True, "source": "demo", "demo": True,
+                    "channel": None, "videos": [],
+                    "note": "No demo channel — connect YouTube for the real one."}
+        ok, why = self.configured()
+        if not ok:
+            return self.unavailable("channel")
+        try:
+            me = self._api("https://www.googleapis.com/youtube/v3/channels"
+                           "?part=snippet,statistics,contentDetails&mine=true")
+            chans = me.get("items") or []
+            if not chans:
+                return {"ok": True, "source": "youtube", "channel": None,
+                        "videos": [],
+                        "note": "That Google account has no YouTube channel."}
+            ch = chans[0]
+            stats = ch.get("statistics", {})
+            uploads = ((ch.get("contentDetails") or {}).get("relatedPlaylists")
+                       or {}).get("uploads")
+            recent = []
+            if uploads:
+                pl = self._api("https://www.googleapis.com/youtube/v3/playlistItems"
+                               f"?part=snippet,contentDetails&maxResults={int(videos)}"
+                               f"&playlistId={uploads}")
+                ids = [i["contentDetails"]["videoId"]
+                       for i in (pl.get("items") or [])
+                       if i.get("contentDetails", {}).get("videoId")]
+                if ids:
+                    vs = self._api("https://www.googleapis.com/youtube/v3/videos"
+                                   "?part=snippet,statistics&id=" + ",".join(ids))
+                    for v in vs.get("items", []):
+                        st = v.get("statistics", {})
+                        recent.append({
+                            "id": v.get("id"),
+                            "title": v.get("snippet", {}).get("title"),
+                            "published": v.get("snippet", {}).get("publishedAt"),
+                            "views": int(st.get("viewCount", 0) or 0),
+                            "likes": int(st.get("likeCount", 0) or 0),
+                            "comments": int(st.get("commentCount", 0) or 0),
+                        })
+            return {"ok": True, "source": "youtube",
+                    "channel": {
+                        "title": ch.get("snippet", {}).get("title"),
+                        "subscribers": int(stats.get("subscriberCount", 0) or 0),
+                        "views": int(stats.get("viewCount", 0) or 0),
+                        "videos": int(stats.get("videoCount", 0) or 0),
+                        "hidden_subs": stats.get("hiddenSubscriberCount", False),
+                    },
+                    "videos": recent}
+        except Exception as e:                              # noqa: BLE001
+            return {"ok": False, "connector": self.key,
+                    "reason": f"YouTube failed: {e}",
+                    "spoken": "YouTube did not answer, Sir."}
+
+
 # ------------------------------------------------------------------ shopify
 
 class ShopifyConnector(Connector):
@@ -327,6 +478,8 @@ REGISTRY: dict[str, Connector] = {
     "gmail": GmailConnector(),
     "calendar": CalendarConnector(),
     "drive": DriveConnector(),
+    "classroom": ClassroomConnector(),
+    "youtube": YouTubeConnector(),
     "shopify": ShopifyConnector(),
 }
 
