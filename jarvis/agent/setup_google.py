@@ -240,28 +240,49 @@ def main() -> None:
     except Exception:                                       # noqa: BLE001
         pass
 
-    print("  Waiting for you to approve it...", flush=True)
-    for _ in range(600):                                    # about five minutes
+    print("  Waiting for you to approve it...")
+    print("  (If the browser lands on an error page, that is fine — see below.)",
+          flush=True)
+    for _ in range(240):                                    # two minutes
         if _Catcher.result:
             break
         threading.Event().wait(0.5)
     server.server_close()
 
     res = _Catcher.result
-    if not res:
-        print("\n  Timed out. Run it again when you are ready.\n")
-        return
-    if res.get("state") != state:
+
+    # The redirect can fail for perfectly ordinary reasons: a browser on a
+    # different machine, a firewall, an extension eating localhost. When it
+    # does, the code is still sitting in the address bar — so take it by hand
+    # rather than making the whole thing a dead end.
+    if not res or "code" not in res:
+        if res and res.get("error"):
+            print(f"\n  Google refused: {res['error']}")
+            if res["error"] == "access_denied":
+                print("  Almost always the Test users step: add your own Gmail")
+                print("  under the consent screen's Test users, then try again.\n")
+                return
+        print("\n  I did not catch the redirect.")
+        print("  Look at your browser's address bar. If the URL contains")
+        print("  `code=` — even on an error page — copy everything between")
+        print("  `code=` and the next `&`, and paste it here.\n")
+        manual = ask("  Code (or Enter to give up): ").strip()
+        if not manual:
+            print("\n  Nothing written. Run this again whenever.\n")
+            return
+        manual = urllib.parse.unquote(manual)
+        if manual.startswith("http"):                # they pasted the whole URL
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(manual).query)
+            manual = (q.get("code") or [""])[0]
+        if not manual:
+            print("\n  No code in that. Nothing written.\n")
+            return
+        res = {"code": manual, "state": state}
+    elif res.get("state") != state:
         print("\n  The redirect did not match what we sent. Nothing written.\n")
         return
-    if "code" not in res:
-        print(f"\n  Google refused: {res.get('error', 'unknown')}")
-        if res.get("error") == "access_denied":
-            print("  If you have not added your own address under Test users")
-            print("  on the consent screen, Google always refuses. Add it.\n")
-        return
 
-    print("  Got the code. Exchanging it for a token...")
+    print("  Exchanging it for a token...")
     body = urllib.parse.urlencode({
         "code": res["code"], "client_id": cid, "client_secret": csec,
         "redirect_uri": REDIRECT, "grant_type": "authorization_code",
@@ -273,8 +294,18 @@ def main() -> None:
         with urllib.request.urlopen(req, timeout=30, context=_ssl_ctx()) as r:
             tok = json.loads(r.read())
     except urllib.error.HTTPError as e:
+        detail = e.read()[:400].decode("utf-8", "replace")
         print(f"\n  Google rejected the exchange: {e.code}")
-        print("  " + e.read()[:300].decode("utf-8", "replace") + "\n")
+        print("  " + detail)
+        if "invalid_grant" in detail:
+            print("\n  invalid_grant almost always means the code was already")
+            print("  used or has expired — they last about a minute. Just run")
+            print("  this again and approve promptly.\n")
+        elif "redirect_uri_mismatch" in detail:
+            print(f"\n  The client must allow {REDIRECT} as a redirect URI.")
+            print("  Recreate it as an application type of 'Desktop app'.\n")
+        else:
+            print()
         return
     except Exception as e:                                  # noqa: BLE001
         print(f"\n  Could not reach Google: {e}\n")
