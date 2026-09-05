@@ -286,3 +286,10 @@ html, body {
 /* A mic with no speech-in tier reads as unavailable rather than broken. */
 .act.mic.dead { color: #3d4653; border-color: var(--line-soft); }
 .act.mic.dead:hover { color: var(--warn); border-color: rgba(255,176,58,.3); }
+
+/* Where the seconds went. Quiet, but always there. */
+.timing {
+  margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--line-soft);
+  font-size: 9.5px; letter-spacing: .06em; color: var(--ink-mute);
+  font-variant-numeric: tabular-nums;
+}

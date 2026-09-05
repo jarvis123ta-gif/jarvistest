@@ -377,6 +377,31 @@ so it is called out by name.
 
 ---
 
+## When it feels slow
+
+Every answer prints where its time went, under the card:
+
+```
+heard 1.4s  ·  read 3.1s  ·  thought 6.2s  ·  spoke 0.3s  ·  11.2s total  ·  14.8 tok/s
+```
+
+Read it before changing anything:
+
+| Slow part | What it means | Fix |
+| --- | --- | --- |
+| **heard** | whisper transcription | a smaller model — `ggml-tiny.en.bin` |
+| **read** | the model ingesting the prompt | fewer tokens in; the compact prompt is already on by default for Ollama |
+| **thought** | generating the reply | a smaller model, or a lower `JARVIS_OLLAMA_PREDICT` |
+| **loaded** | Ollama evicted the model between turns | `JARVIS_OLLAMA_KEEPALIVE=30m` |
+| **spoke** | text to speech | nothing to do; the OS voice is already instant |
+
+The single biggest lever is which model you pulled. `llama3.2:3b` answers in
+a couple of seconds on a laptop and still calls tools; a 7B or larger is
+noticeably smarter and noticeably slower. Local models also get a compact
+system prompt automatically — a 3B model reading eight kilobytes of identity
+before every answer spends most of its time on the prompt rather than the
+question.
+
 ## What it costs
 
 **Nothing, until you add a key.** With neither key set it runs, indexes,

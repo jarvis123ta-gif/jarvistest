@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import ssl
+import time
 import urllib.error
 import urllib.request
 
@@ -196,6 +197,7 @@ def _to_anthropic(history: list[dict]) -> list[dict]:
 
 def _chat_anthropic(history: list[dict], system: str, tool_schema: list[dict]) -> dict:
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+    t0 = time.time()
     out = _post(base + "/v1/messages", {
         "model": ANTHROPIC_MODEL,
         # Generous, because adaptive thinking spends from this budget too.
@@ -211,6 +213,7 @@ def _chat_anthropic(history: list[dict], system: str, tool_schema: list[dict]) -
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"}, timeout=120)
 
+    wall = int((time.time() - t0) * 1000)
     u = out.get("usage", {})
     USAGE["input_tokens"] += u.get("input_tokens", 0)
     USAGE["output_tokens"] += u.get("output_tokens", 0)
@@ -222,7 +225,7 @@ def _chat_anthropic(history: list[dict], system: str, tool_schema: list[dict]) -
     calls = [{"id": b["id"], "name": b["name"], "input": b.get("input", {})}
              for b in out.get("content", []) if b.get("type") == "tool_use"]
     return {"text": text, "tool_calls": calls, "provider": "anthropic",
-            "model": ANTHROPIC_MODEL}
+            "model": ANTHROPIC_MODEL, "ms": {"total": wall}}
 
 
 # ------------------------------------------------------------------ ollama
@@ -262,15 +265,26 @@ def _chat_ollama(history: list[dict], system: str, tool_schema: list[dict]) -> d
         "model": model,
         "messages": _to_ollama(history, system),
         "stream": False,
-        "options": {"temperature": float(os.environ.get("JARVIS_OLLAMA_TEMP", "0.4")),
-                    "num_ctx": int(os.environ.get("JARVIS_OLLAMA_CTX", "8192"))},
+        # keep_alive stops Ollama evicting the model between turns. Without
+        # it every question pays the load cost again, which on a laptop is
+        # most of the wait.
+        "keep_alive": os.environ.get("JARVIS_OLLAMA_KEEPALIVE", "30m"),
+        "options": {
+            "temperature": float(os.environ.get("JARVIS_OLLAMA_TEMP", "0.4")),
+            "num_ctx": int(os.environ.get("JARVIS_OLLAMA_CTX", "4096")),
+            # Spoken answers are one or two sentences. Without a cap a local
+            # model will happily generate for a minute.
+            "num_predict": int(os.environ.get("JARVIS_OLLAMA_PREDICT", "220")),
+        },
     }
     if _tool_capable(model):
         body["tools"] = _to_ollama_tools(tool_schema)
 
+    t0 = time.time()
     out = _post(f"{OLLAMA_HOST}/api/chat", body,
                 {"content-type": "application/json"},
                 timeout=int(os.environ.get("JARVIS_OLLAMA_TIMEOUT", "300")))
+    wall = int((time.time() - t0) * 1000)
 
     USAGE["input_tokens"] += out.get("prompt_eval_count", 0)
     USAGE["output_tokens"] += out.get("eval_count", 0)
@@ -290,14 +304,29 @@ def _chat_ollama(history: list[dict], system: str, tool_schema: list[dict]) -> d
         # Ollama does not issue call ids; the loop needs one to pair results.
         calls.append({"id": f"ollama-{USAGE['calls']}-{i}",
                       "name": fn.get("name", ""), "input": args or {}})
+    # Ollama reports its own nanosecond timings; they say whether the wait
+    # was loading the model, reading the prompt, or generating.
+    ns = lambda k: int(out.get(k, 0) / 1e6)
     return {"text": (msg.get("content") or "").strip(), "tool_calls": calls,
-            "provider": "ollama", "model": model}
+            "provider": "ollama", "model": model,
+            "ms": {"total": wall, "load": ns("load_duration"),
+                   "prompt": ns("prompt_eval_duration"),
+                   "generate": ns("eval_duration"),
+                   "prompt_tokens": out.get("prompt_eval_count", 0),
+                   "output_tokens": out.get("eval_count", 0)}}
 
 
 # ------------------------------------------------------------------ api
 
+def wants_compact_prompt() -> bool:
+    """A local 3B model reading eight kilobytes of identity before every
+    answer spends most of its time on the prompt, not the question."""
+    return resolve() == "ollama" and os.environ.get(
+        "JARVIS_FULL_PROMPT", "").strip().lower() not in ("1", "true", "yes")
+
+
 def chat(history: list[dict], system: str, tool_schema: list[dict]) -> dict:
-    """One turn. Returns {text, tool_calls, provider, model}."""
+    """One turn. Returns {text, tool_calls, provider, model, ms}."""
     who = resolve()
     if who == "anthropic":
         return _chat_anthropic(history, system, tool_schema)

@@ -32,6 +32,7 @@ const S = {
   levelTimer: null,
   lastVoice: 0, speechStart: 0, heardSpeech: false,
   audio: null, level: 0, status: null, audioUnlocked: false,
+  lastListenMs: 0, lastSpeakMs: 0,
   armed: true, acting: false,
 };
 
@@ -267,12 +268,30 @@ async function ask(text) {
   const cards = r.cards && r.cards.length ? r.cards : (r.card ? [r.card] : []);
   $('#card').innerHTML = cards.map(renderCard).join('') +
     (r.badge ? `<div class="flag">${esc(r.badge)}${
-      r.routed_by ? ' · ' + esc(r.routed_by) : ''}</div>` : '');
+      r.routed_by ? ' · ' + esc(r.routed_by) : ''}</div>` : '') +
+    timingLine(r);
   $$('#card .file').forEach(f => f.onclick = () => {
     if (f.dataset.id) Graph.focusById(f.dataset.id);
   });
 
   await speak(r.spoken);
+}
+
+/* A slow answer should say which part was slow. Guessing at that is how
+   people end up optimising the wrong thing. */
+function timingLine(r) {
+  const t = r.timing || {};
+  const bits = [];
+  if (S.lastListenMs) bits.push(`heard ${(S.lastListenMs / 1000).toFixed(1)}s`);
+  if (t.prompt) bits.push(`read ${(t.prompt / 1000).toFixed(1)}s`);
+  if (t.generate) bits.push(`thought ${(t.generate / 1000).toFixed(1)}s`);
+  if (t.load > 200) bits.push(`loaded ${(t.load / 1000).toFixed(1)}s`);
+  if (S.lastSpeakMs) bits.push(`spoke ${(S.lastSpeakMs / 1000).toFixed(1)}s`);
+  if (r.ms) bits.push(`${(r.ms / 1000).toFixed(1)}s total`);
+  if (t.tokens_per_sec) bits.push(`${t.tokens_per_sec} tok/s`);
+  if (r.model_name) bits.push(esc(r.model_name));
+  if (!bits.length) return '';
+  return `<div class="timing">${bits.join('  ·  ')}</div>`;
 }
 
 /* ================================================================ cards */
@@ -495,6 +514,7 @@ async function speak(text) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text }),
     });
+    S.lastSpeakMs = parseInt(res.headers.get('X-Voice-Ms') || '0', 10);
     if (!res.ok) {
       const e = await res.json().catch(() => ({}));
       alertLoud('Could not speak: ' + (e.error || res.status), 'warn');
@@ -717,6 +737,7 @@ async function onTurnEnd(blob) {
     alertLoud('Could not transcribe: ' + out.error);
     caption(''); resumeListening(); return;
   }
+  S.lastListenMs = out.ms || 0;
   const text = (out.text || '').trim();
   caption(text || '(nothing heard)');
   if (!text) { resumeListening(); return; }
