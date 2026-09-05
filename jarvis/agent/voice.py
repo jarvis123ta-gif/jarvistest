@@ -122,6 +122,20 @@ def find_whisper_model() -> str | None:
     return m if m and os.path.isfile(m) else None
 
 
+def find_os_stt() -> tuple[str, str] | None:
+    """Speech recognition that is already on the machine, no download.
+
+    Windows ships System.Speech.Recognition; it is markedly less accurate
+    than Whisper but it is offline, private and needs nothing installed.
+    macOS has no scriptable offline recogniser, so there is no equivalent —
+    on a Mac, whisper.cpp is one `brew install whisper-cpp` away.
+    """
+    if IS_WINDOWS:
+        ps = shutil.which("powershell") or shutil.which("pwsh")
+        return ("winsr", ps) if ps else None
+    return None
+
+
 def find_tts() -> tuple[str, str] | None:
     """(kind, binary) for local speech-out."""
     if IS_WINDOWS:
@@ -137,39 +151,82 @@ def find_tts() -> tuple[str, str] | None:
     return None
 
 
+# Listening and speaking are separate capabilities and are resolved
+# separately. Every machine can already speak — macOS has `say`, Windows has
+# SAPI, Linux usually has espeak — so treating voice as one on/off switch
+# silenced output that worked perfectly whenever speech-in was missing.
+
+WHISPER_HINT = {
+    "darwin": "brew install whisper-cpp, then download a model",
+    "win32": "download a whisper.cpp release and set JARVIS_WHISPER_BIN",
+}
+
+
 def probe() -> dict:
     """Everything this machine can actually do for voice, right now."""
-    whisper, model, tts = find_whisper(), find_whisper_model(), find_tts()
+    whisper, model, tts, ossr = (find_whisper(), find_whisper_model(),
+                                 find_tts(), find_os_stt())
+    hint = WHISPER_HINT.get(sys.platform, "install whisper.cpp and put "
+                                          "whisper-cli on PATH")
     return {
         "openai": {"ok": bool(_key("OPENAI_API_KEY")),
+                   "listen": bool(_key("OPENAI_API_KEY")),
+                   "speak": bool(_key("OPENAI_API_KEY")),
                    "in": "whisper-1", "out": "tts-1",
                    "why": "" if _key("OPENAI_API_KEY") else "OPENAI_API_KEY not set"},
         "elevenlabs": {"ok": bool(_key("ELEVENLABS_API_KEY")),
+                       "listen": bool(_key("ELEVENLABS_API_KEY")),
+                       "speak": bool(_key("ELEVENLABS_API_KEY")),
                        "in": "scribe_v1", "out": "eleven_turbo_v2_5",
                        "why": "" if _key("ELEVENLABS_API_KEY") else "ELEVENLABS_API_KEY not set"},
-        "local": {
-            "ok": bool(whisper and tts),
-            "in": whisper or None, "out": (tts[1] if tts else None),
-            "out_kind": (tts[0] if tts else None),
-            "model": model,
-            "why": ("" if (whisper and tts) else
-                    ("no whisper.cpp binary on PATH — install it and either put "
-                     "whisper-cli on PATH or set JARVIS_WHISPER_BIN"
-                     if not whisper else "no local speech-out found")),
-        },
+        "whispercpp": {"ok": bool(whisper), "listen": bool(whisper),
+                       "speak": False, "in": whisper or None, "model": model,
+                       "why": "" if whisper else f"whisper.cpp not found — {hint}"},
+        "os": {"ok": bool(ossr), "listen": bool(ossr), "speak": False,
+               "in": (ossr[0] if ossr else None),
+               "why": "" if ossr else
+                      ("Windows speech recognition unavailable" if IS_WINDOWS
+                       else f"{sys.platform} has no built-in recogniser to script")},
+        "local": {"ok": bool(tts), "listen": False, "speak": bool(tts),
+                  "out": (tts[1] if tts else None),
+                  "out_kind": (tts[0] if tts else None),
+                  "why": "" if tts else "no local speech-out found"},
     }
 
 
-def resolve() -> str:
-    """Which tier is actually live."""
-    pinned = os.environ.get("JARVIS_VOICE", "auto").strip().lower()
-    if pinned and pinned != "auto":
-        return pinned
-    p = probe()
-    for tier in ("openai", "elevenlabs", "local"):
-        if p[tier]["ok"]:
+LISTEN_ORDER = ("openai", "elevenlabs", "whispercpp", "os")
+SPEAK_ORDER = ("openai", "elevenlabs", "local")
+
+
+def _pinned() -> str:
+    return os.environ.get("JARVIS_VOICE", "auto").strip().lower()
+
+
+def resolve_listen() -> str:
+    pin, p = _pinned(), probe()
+    if pin not in ("", "auto"):
+        return pin if p.get(pin, {}).get("listen") else "none"
+    for tier in LISTEN_ORDER:
+        if p[tier]["listen"]:
             return tier
     return "none"
+
+
+def resolve_speak() -> str:
+    pin, p = _pinned(), probe()
+    if pin not in ("", "auto"):
+        return pin if p.get(pin, {}).get("speak") else (
+            "local" if p["local"]["speak"] else "none")
+    for tier in SPEAK_ORDER:
+        if p[tier]["speak"]:
+            return tier
+    return "none"
+
+
+def resolve() -> str:
+    """Kept for callers that want one word for the whole subsystem."""
+    listen = resolve_listen()
+    return listen if listen != "none" else resolve_speak()
 
 
 def provider() -> str:
@@ -177,49 +234,112 @@ def provider() -> str:
 
 
 def status() -> dict:
-    """Degrade loudly. The UI renders this verbatim when something is off."""
+    """Degrade loudly, and per capability. The UI renders this verbatim.
+
+    `ok` means *something* works. Speaking and listening are reported
+    separately, because a machine that can speak but not listen is still a
+    useful voice assistant — it just needs typing instead of talking.
+    """
     p = probe()
-    tier = resolve()
-    ok, why = True, ""
+    listen, speak = resolve_listen(), resolve_speak()
+    capped = (listen in ("openai", "elevenlabs") or
+              speak in ("openai", "elevenlabs")) and _cap_hit()
 
-    if tier == "none":
-        ok = False
-        why = ("No voice available. Cheapest fix: install whisper.cpp for "
-               "speech-in — speech-out already works on Windows through the "
-               "built-in voice. Or set OPENAI_API_KEY.")
-    elif tier in ("openai", "elevenlabs", "local"):
-        if not p[tier]["ok"]:
-            ok, why = False, p[tier]["why"]
+    listen_ok = listen != "none" and not (
+        capped and listen in ("openai", "elevenlabs"))
+    speak_ok = speak != "none" and not (
+        capped and speak in ("openai", "elevenlabs"))
+
+    cap_msg = (f"voice session cap of ${SESSION_CAP_USD:.2f} reached — raise "
+               "JARVIS_VOICE_CAP_USD, or use a local tier which costs nothing")
+
+    listen_why = ""
+    if not listen_ok:
+        listen_why = cap_msg if capped else (
+            "No microphone tier. " + p["whispercpp"]["why"] +
+            ". Or set OPENAI_API_KEY. You can still type.")
+    speak_why = ""
+    if not speak_ok:
+        speak_why = cap_msg if capped else (
+            "No speech-out on this machine. " + p["local"]["why"])
+
+    ok = listen_ok or speak_ok
+    if not ok:
+        reason = "No voice at all. " + listen_why
+    elif not listen_ok:
+        reason = f"Speaking works ({speak}); listening does not. " + listen_why
+    elif not speak_ok:
+        reason = f"Listening works ({listen}); speaking does not. " + speak_why
     else:
-        ok, why = False, f"unknown voice tier {tier!r}"
+        reason = ""
 
-    # Local speech-out can work even when local speech-in cannot; say so
-    # rather than reporting a flat failure.
-    half = None
-    if not ok and p["local"]["out"]:
-        half = "speech-out works; speech-in does not"
-
-    if ok and tier in ("openai", "elevenlabs") and _cap_hit():
-        ok, why = False, (f"voice session cap of ${SESSION_CAP_USD:.2f} reached — "
-                          "raise JARVIS_VOICE_CAP_USD, or switch to the local "
-                          "tier which costs nothing")
-
-    return {"provider": tier, "ok": ok, "reason": why, "partial": half,
-            "auto": os.environ.get("JARVIS_VOICE", "auto").strip().lower() == "auto",
-            "tiers": p, "free": tier == "local",
-            "tts_voice": os.environ.get("JARVIS_TTS_VOICE", "onyx"),
-            "spend": spend()}
+    return {
+        "provider": listen if listen != "none" else speak,
+        "ok": ok, "reason": reason,
+        "listen": {"ok": listen_ok, "provider": listen, "reason": listen_why},
+        "speak": {"ok": speak_ok, "provider": speak, "reason": speak_why},
+        "auto": _pinned() in ("", "auto"),
+        "tiers": p,
+        "free": listen in ("whispercpp", "os", "none") and speak == "local",
+        "tts_voice": os.environ.get("JARVIS_TTS_VOICE", "onyx"),
+        "spend": spend(),
+    }
 
 
 # ---------------------------------------------------------------- speech in
 
+_WINSR = r"""
+Add-Type -AssemblyName System.Speech
+$ErrorActionPreference = 'Stop'
+try {{
+  $r = New-Object System.Speech.Recognition.SpeechRecognitionEngine `
+       (New-Object System.Globalization.CultureInfo("en-US"))
+}} catch {{
+  $r = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+}}
+$r.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
+$r.SetInputToWaveFile('{wav}')
+$sb = New-Object System.Text.StringBuilder
+while ($true) {{
+  try {{ $res = $r.Recognize() }} catch {{ break }}
+  if ($null -eq $res) {{ break }}
+  [void]$sb.Append($res.Text); [void]$sb.Append(' ')
+}}
+$r.Dispose()
+[Console]::Out.Write($sb.ToString().Trim())
+"""
+
+
+def _os_transcribe(ps: str, audio: bytes) -> dict:
+    """Windows' own recogniser. Offline, free, already installed."""
+    wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    wav.write(audio)
+    wav.close()
+    try:
+        out = subprocess.run(
+            [ps, "-NoProfile", "-NonInteractive", "-Command",
+             _WINSR.format(wav=wav.name.replace("'", "''"))],
+            capture_output=True, timeout=120)
+        text = out.stdout.decode("utf-8", "replace").strip()
+        if not text and out.returncode != 0:
+            return {"ok": False, "provider": "windows/speech",
+                    "error": "Windows speech recognition failed: " +
+                             out.stderr.decode("utf-8", "replace")[:200]}
+        return {"ok": True, "text": text, "provider": "windows/speech"}
+    finally:
+        try:
+            os.unlink(wav.name)
+        except OSError:
+            pass
+
+
 def transcribe(audio: bytes, mime: str = "audio/wav") -> dict:
     st = status()
-    tier = st["provider"]
+    tier = st["listen"]["provider"]
     if not audio:
         return {"ok": False, "error": "empty recording — is the mic actually open?"}
-    if not st["ok"] and tier != "local":
-        return {"ok": False, "error": st["reason"], "provider": tier}
+    if not st["listen"]["ok"]:
+        return {"ok": False, "error": st["listen"]["reason"], "provider": tier}
 
     try:
         if tier == "openai":
@@ -245,11 +365,18 @@ def transcribe(audio: bytes, mime: str = "audio/wav") -> dict:
             return {"ok": True, "text": json.loads(raw).get("text", "").strip(),
                     "provider": "elevenlabs/scribe_v1"}
 
-        if tier == "local":
+        if tier == "os":
+            found = find_os_stt()
+            if not found:
+                return {"ok": False, "provider": "os",
+                        "error": probe()["os"]["why"]}
+            return _os_transcribe(found[1], audio)
+
+        if tier in ("whispercpp", "local"):
             binary = find_whisper()
             if not binary:
-                return {"ok": False, "provider": "local",
-                        "error": probe()["local"]["why"]}
+                return {"ok": False, "provider": "whispercpp",
+                        "error": probe()["whispercpp"]["why"]}
             model = find_whisper_model()
             tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             tmp.write(audio)
@@ -264,7 +391,8 @@ def transcribe(audio: bytes, mime: str = "audio/wav") -> dict:
                     return {"ok": False, "provider": "local",
                             "error": "whisper failed: " +
                                      out.stderr.decode("utf-8", "replace")[:200]}
-                return {"ok": True, "text": text, "provider": f"local/{os.path.basename(binary)}"}
+                return {"ok": True, "text": text,
+                        "provider": f"local/{os.path.basename(binary)}"}
             finally:
                 os.unlink(tmp.name)
 
@@ -322,18 +450,12 @@ def _sapi_speak(ps: str, text: str) -> bytes:
 
 def speak(text: str) -> dict:
     st = status()
-    tier = st["provider"]
+    tier = st["speak"]["provider"]
     text = (text or "").strip()[:2000]
     if not text:
         return {"ok": False, "error": "nothing to say"}
-
-    # Speech-out may work even when the chosen tier is off overall.
-    if not st["ok"] and tier != "local":
-        local_out = find_tts()
-        if local_out:
-            tier = "local"
-        else:
-            return {"ok": False, "error": st["reason"], "provider": st["provider"]}
+    if not st["speak"]["ok"]:
+        return {"ok": False, "error": st["speak"]["reason"], "provider": tier}
 
     try:
         if tier == "openai":

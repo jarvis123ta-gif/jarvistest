@@ -210,17 +210,33 @@ one.
 `JARVIS_VOICE=auto` (the default) probes the machine, picks the best tier
 that actually works, and says which one is live on screen.
 
-| Tier | Speech in | Speech out | Needs |
-| --- | --- | --- | --- |
-| `openai` | `whisper-1` | `tts-1` | `OPENAI_API_KEY` |
-| `elevenlabs` | `scribe_v1` | eleven turbo | `ELEVENLABS_API_KEY` |
-| `local` | whisper.cpp | Windows built-in voice | free, private, no cloud |
-| `none` | — | — | says so on screen |
+**Listening and speaking are resolved separately**, because a machine that
+can speak but not listen is still a useful assistant — it just needs typing
+instead of talking. Treating voice as one on/off switch silenced output that
+worked perfectly.
 
-**On Windows, speech-out already works with nothing installed** — the
-built-in SAPI voice, driven through PowerShell. Only speech-in needs
-whisper.cpp, and the probe tells you exactly what is missing and how to fix
-it. Pin a tier by naming it instead of `auto`.
+| Speech out | Needs | |
+| --- | --- | --- |
+| `openai` `tts-1` | `OPENAI_API_KEY` | best quality |
+| `elevenlabs` | `ELEVENLABS_API_KEY` | best quality |
+| `local` | **nothing** | macOS `say`, Windows SAPI, Linux espeak |
+
+| Speech in | Needs | |
+| --- | --- | --- |
+| `openai` `whisper-1` | `OPENAI_API_KEY` | best accuracy |
+| `elevenlabs` `scribe_v1` | `ELEVENLABS_API_KEY` | best accuracy |
+| `whispercpp` | one install | free, private, very good |
+| `os` | **nothing**, Windows only | built-in recogniser, less accurate |
+
+**Speech-out works on every OS with nothing installed.** Only listening
+needs setting up:
+
+```bash
+brew install whisper-cpp          # macOS
+```
+
+The probe says exactly what is missing and how to fix it. Pin a tier by
+naming it instead of `auto`.
 
 Audio reaches the server as **16 kHz mono WAV, encoded in the browser**. That
 is deliberate: whisper.cpp cannot read WebM/Opus without ffmpeg, and every

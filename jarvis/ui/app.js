@@ -85,9 +85,14 @@ async function loadStatus() {
   if (!st.model.ok) {
     alertLoud('No model: ' + st.model.reason, 'warn');
   }
-  if (!st.voice.ok) {
-    alertLoud('Voice off (' + st.voice.provider + '): ' + st.voice.reason, 'warn');
+  const v = st.voice || {};
+  if (!v.ok) {
+    alertLoud('Voice off: ' + v.reason, 'warn');
+  } else if (v.reason) {
+    // Half of it works. Say which half rather than a blanket "off".
+    alertLoud(v.reason, 'warn');
   }
+  $('#micBtn').classList.toggle('dead', !(v.listen && v.listen.ok));
   if (st.roots.missing.length) {
     alertLoud('Folder not found: ' + st.roots.missing.join(', '));
   }
@@ -475,7 +480,9 @@ function cardMemories(c) {
 
 async function speak(text) {
   if (!text) { setState('idle'); return resumeListening(); }
-  if (S.muted || !(S.status && S.status.voice.ok)) {
+  const canSpeak = S.status && S.status.voice && S.status.voice.speak
+                   && S.status.voice.speak.ok;
+  if (S.muted || !canSpeak) {
     setState('idle');
     return resumeListening();
   }
@@ -519,8 +526,10 @@ function bargeIn() {
 async function micToggle() {
   if (S.state === 'speaking') { bargeIn(); }
   if (S.micOn) { micOff(); return; }
-  if (!(S.status && S.status.voice.ok)) {
-    alertLoud('Mic is pointless right now: ' + S.status.voice.reason, 'warn');
+  const listen = S.status && S.status.voice && S.status.voice.listen;
+  if (!(listen && listen.ok)) {
+    alertLoud('No microphone tier, Sir: ' + (listen ? listen.reason : 'voice is off')
+              + ' Typing still works, and I can still speak.', 'warn');
     return;
   }
   try {

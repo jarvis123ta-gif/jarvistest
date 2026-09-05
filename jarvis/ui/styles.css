@@ -282,3 +282,7 @@ html, body {
 .actionrow.refused .what { color: var(--bad); }
 
 @media (prefers-reduced-motion: reduce) { #actingFrame { transition: none; } }
+
+/* A mic with no speech-in tier reads as unavailable rather than broken. */
+.act.mic.dead { color: #3d4653; border-color: var(--line-soft); }
+.act.mic.dead:hover { color: var(--warn); border-color: rgba(255,176,58,.3); }
