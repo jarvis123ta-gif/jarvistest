@@ -4,12 +4,16 @@ Three providers, auto-detected in this order:
 
     anthropic   Claude, over the API. Best quality. Needs ANTHROPIC_API_KEY
                 and costs money per turn.
+    gemini      Google Gemini. Fast, generous free tier, needs only
+                GEMINI_API_KEY from aistudio.google.com. Your prompts go to
+                Google.
     ollama      A model running on this machine. Free, private, no key, no
                 network. Quality depends on the model pulled.
     none        No model reachable. main.py falls back to keyword and
                 file-score routing and says so on screen.
 
-Pin one with JARVIS_LLM=anthropic|ollama|none. The default is auto.
+Pin one with JARVIS_LLM=anthropic|gemini|ollama|none. The default is auto,
+which prefers Claude, then Gemini, then whatever is running locally.
 
 Conversations are held in a neutral shape and converted per provider, so
 the agent loop in main.py never learns either wire format:
@@ -27,6 +31,7 @@ import os
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 USAGE = {"input_tokens": 0, "output_tokens": 0, "cache_reads": 0,
@@ -35,6 +40,10 @@ USAGE = {"input_tokens": 0, "output_tokens": 0, "cache_reads": 0,
 ANTHROPIC_MODEL = os.environ.get("JARVIS_MODEL", "claude-opus-5")
 EFFORT = os.environ.get("JARVIS_EFFORT", "low")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+GEMINI_HOST = "https://generativelanguage.googleapis.com/v1beta"
+# Not hardcoded as a single name: model ids go stale, and a wrong one is an
+# opaque 404. The list endpoint decides, preferring flash for latency.
+GEMINI_PREFER = ("flash-latest", "flash", "pro-latest", "pro")
 
 # Ollama models that actually support tool calling. A model without it can
 # still converse, but every tool would be dead, so JARVIS says so instead of
@@ -64,6 +73,49 @@ def _post(url: str, payload: dict, headers: dict, timeout: int = 180) -> dict:
 
 def _anthropic_key() -> str:
     return (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+
+
+def _gemini_key() -> str:
+    return (os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_AI_API_KEY") or "").strip()
+
+
+_gemini_models_cache: list[str] | None = None
+
+
+def gemini_models(force: bool = False) -> list[str]:
+    """Ask Google what this key can actually use, rather than guessing."""
+    global _gemini_models_cache
+    if _gemini_models_cache is not None and not force:
+        return _gemini_models_cache
+    key = _gemini_key()
+    if not key:
+        return []
+    try:
+        with urllib.request.urlopen(
+                f"{GEMINI_HOST}/models?key={urllib.parse.quote(key)}",
+                timeout=8, context=_ssl_ctx()) as r:
+            raw = json.loads(r.read())
+        out = [m["name"].split("/", 1)[-1] for m in raw.get("models", [])
+               if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+    except Exception:                                       # noqa: BLE001
+        out = []
+    _gemini_models_cache = out
+    return out
+
+
+def pick_gemini_model() -> str | None:
+    pinned = os.environ.get("JARVIS_GEMINI_MODEL", "").strip()
+    if pinned:
+        return pinned
+    available = gemini_models()
+    if not available:
+        return None
+    for want in GEMINI_PREFER:
+        for m in available:
+            if want in m and "vision" not in m and "embedding" not in m:
+                return m
+    return available[0]
 
 
 def ollama_models() -> list[str]:
@@ -103,6 +155,8 @@ def pick_ollama_model() -> str | None:
 
 def probe() -> dict:
     key = bool(_anthropic_key())
+    gkey = bool(_gemini_key())
+    gmodel = pick_gemini_model() if gkey else None
     installed = ollama_models()
     up = bool(installed) or ollama_reachable()
     chosen = pick_ollama_model()
@@ -110,6 +164,14 @@ def probe() -> dict:
         "anthropic": {
             "ok": key, "model": ANTHROPIC_MODEL if key else None,
             "why": "" if key else "ANTHROPIC_API_KEY not set",
+        },
+        "gemini": {
+            "ok": gkey and bool(gmodel), "model": gmodel,
+            "available": gemini_models() if gkey else [],
+            "why": ("" if (gkey and gmodel) else
+                    ("GEMINI_API_KEY not set — get one free at "
+                     "aistudio.google.com/apikey" if not gkey else
+                     "that key cannot reach any Gemini model")),
         },
         "ollama": {
             "ok": up and bool(chosen), "host": OLLAMA_HOST,
@@ -129,10 +191,9 @@ def resolve() -> str:
     if pinned and pinned != "auto":
         return pinned
     p = probe()
-    if p["anthropic"]["ok"]:
-        return "anthropic"
-    if p["ollama"]["ok"]:
-        return "ollama"
+    for tier in ("anthropic", "gemini", "ollama"):
+        if p[tier]["ok"]:
+            return tier
     return "none"
 
 
@@ -173,12 +234,14 @@ def status() -> dict:
 
     reason = ""
     if not ok:
-        reason = ("No model reachable. Either set ANTHROPIC_API_KEY, or "
-                  "install Ollama from ollama.com and run `ollama pull "
-                  "llama3.1` — that one is free and runs on your machine. "
-                  "Until then I route by keyword and file score, and I say so.")
+        reason = ("No model reachable. Fastest free option: a Gemini key from "
+                  "aistudio.google.com/apikey into GEMINI_API_KEY. Or install "
+                  "Ollama from ollama.com for one that never leaves this "
+                  "machine. Until then I route by keyword and file score, and "
+                  "I say so.")
     return {"provider": who, "ok": ok, "name": name, "reason": reason,
-            "warn": warn, "free": who == "ollama",
+            "warn": warn, "free": who in ("ollama", "gemini"),
+            "private": who == "ollama",
             "auto": os.environ.get("JARVIS_LLM", "auto").strip().lower() == "auto",
             "tools": p["ollama"]["tools"] if who == "ollama" else True,
             "providers": p, "usage": USAGE, "cost": estimated_cost()}
@@ -356,12 +419,103 @@ def _chat_ollama(history: list[dict], system: str, tool_schema: list[dict]) -> d
                    "output_tokens": out.get("eval_count", 0)}}
 
 
+# ------------------------------------------------------------------ gemini
+
+def _to_gemini_tools(tool_schema: list[dict]) -> list[dict]:
+    """Gemini takes OpenAPI-subset schemas. Strip what it rejects rather
+    than letting it 400 on a keyword it does not know."""
+    allowed = {"type", "description", "properties", "required", "items",
+               "enum", "nullable"}
+
+    def clean(node):
+        if not isinstance(node, dict):
+            return node
+        out = {k: v for k, v in node.items() if k in allowed}
+        if "properties" in out:
+            out["properties"] = {k: clean(v) for k, v in out["properties"].items()}
+        if "items" in out:
+            out["items"] = clean(out["items"])
+        return out
+
+    return [{"function_declarations": [
+        {"name": t["name"], "description": t["description"],
+         "parameters": clean(t["input_schema"])}
+        for t in tool_schema]}]
+
+
+def _to_gemini(history: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for m in history:
+        if m["role"] == "user":
+            out.append({"role": "user", "parts": [{"text": m["text"]}]})
+        elif m["role"] == "assistant":
+            parts = []
+            if m.get("text"):
+                parts.append({"text": m["text"]})
+            for c in m.get("tool_calls") or []:
+                parts.append({"functionCall": {"name": c["name"],
+                                               "args": c["input"]}})
+            out.append({"role": "model", "parts": parts or [{"text": ""}]})
+        else:
+            # Tool results come back as a user turn carrying functionResponse.
+            out.append({"role": "user", "parts": [{"functionResponse": {
+                "name": m.get("name", "tool"),
+                "response": {"result": m["content"]}}}]})
+    return out
+
+
+def _chat_gemini(history: list[dict], system: str, tool_schema: list[dict]) -> dict:
+    model = pick_gemini_model()
+    if not model:
+        raise RuntimeError(probe()["gemini"]["why"])
+    body = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": _to_gemini(history),
+        "tools": _to_gemini_tools(tool_schema),
+        "generationConfig": {
+            "temperature": float(os.environ.get("JARVIS_GEMINI_TEMP", "0.4")),
+            "maxOutputTokens": int(os.environ.get("JARVIS_GEMINI_TOKENS", "800")),
+        },
+    }
+    t0 = time.time()
+    out = _post(f"{GEMINI_HOST}/models/{model}:generateContent"
+                f"?key={urllib.parse.quote(_gemini_key())}",
+                body, {"content-type": "application/json"}, timeout=90)
+    wall = int((time.time() - t0) * 1000)
+
+    u = out.get("usageMetadata", {})
+    USAGE["input_tokens"] += u.get("promptTokenCount", 0)
+    USAGE["output_tokens"] += u.get("candidatesTokenCount", 0)
+    USAGE["calls"] += 1
+    USAGE["provider"] = "gemini"
+
+    cands = out.get("candidates") or []
+    parts = (cands[0].get("content", {}) if cands else {}).get("parts") or []
+    text = " ".join(p["text"] for p in parts if "text" in p).strip()
+    calls = []
+    for i, p in enumerate(parts):
+        fc = p.get("functionCall")
+        if fc:
+            calls.append({"id": f"gemini-{USAGE['calls']}-{i}",
+                          "name": fc.get("name", ""),
+                          "input": fc.get("args") or {}})
+    if not text and not calls and cands:
+        # A safety block or an empty candidate: say so rather than going mute.
+        reason = cands[0].get("finishReason") or "no content"
+        text = f"Gemini returned nothing, Sir ({reason})."
+    return {"text": text, "tool_calls": calls, "provider": "gemini",
+            "model": model,
+            "ms": {"total": wall,
+                   "prompt_tokens": u.get("promptTokenCount", 0),
+                   "output_tokens": u.get("candidatesTokenCount", 0)}}
+
+
 # ------------------------------------------------------------------ api
 
 def wants_compact_prompt() -> bool:
     """A local 3B model reading eight kilobytes of identity before every
     answer spends most of its time on the prompt, not the question."""
-    return resolve() == "ollama" and os.environ.get(
+    return resolve() in ("ollama", "gemini") and os.environ.get(
         "JARVIS_FULL_PROMPT", "").strip().lower() not in ("1", "true", "yes")
 
 
@@ -370,13 +524,15 @@ def chat(history: list[dict], system: str, tool_schema: list[dict]) -> dict:
     who = resolve()
     if who == "anthropic":
         return _chat_anthropic(history, system, tool_schema)
+    if who == "gemini":
+        return _chat_gemini(history, system, tool_schema)
     if who == "ollama":
         return _chat_ollama(history, system, tool_schema)
     raise RuntimeError(status()["reason"])
 
 
 def available() -> bool:
-    return resolve() in ("anthropic", "ollama")
+    return resolve() in ("anthropic", "gemini", "ollama")
 
 
 if __name__ == "__main__":

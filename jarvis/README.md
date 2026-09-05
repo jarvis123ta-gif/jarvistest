@@ -205,6 +205,7 @@ Then fill in what you want:
 | Variable | What happens without it |
 | --- | --- |
 | `ANTHROPIC_API_KEY` | Still runs. Routes by keyword and file score, and shows a badge saying the model is missing. It never passes keyword matching off as the model talking. |
+| `GEMINI_API_KEY` | Optional. Free tier, fast, and the middle option between paying for Claude and running Ollama locally. |
 | `OPENAI_API_KEY` | Still runs, text only. The mic button says why it is pointless. |
 | `SHOPIFY_*` | Store questions answer "not connected". No prices, no orders, no guesses. |
 | `GOOGLE_*` | Mail, calendar and Drive answer "not connected". Files still work. |
@@ -416,6 +417,24 @@ produces no error is the single most confusing failure in a build like this,
 so it is called out by name.
 
 ---
+
+## Which brain
+
+Three providers, auto-detected in order, and the interface always says which
+one answered.
+
+| | Speed | Cost | Privacy |
+| --- | --- | --- | --- |
+| **Claude** (`ANTHROPIC_API_KEY`) | fast | ~0.6c a turn | prompts go to Anthropic |
+| **Gemini** (`GEMINI_API_KEY`) | fast | free tier | prompts go to Google |
+| **Ollama** (nothing) | depends on the model | free | nothing leaves the machine |
+
+Gemini picks its own model from what your key can actually reach, preferring
+flash for latency — model ids go stale and a wrong one is an opaque 404.
+Pin one with `JARVIS_GEMINI_MODEL`.
+
+All three call tools identically; the schemas are converted per provider, so
+adding a fourth is a function, not a rewrite.
 
 ## The fast path
 

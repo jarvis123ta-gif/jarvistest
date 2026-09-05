@@ -121,6 +121,10 @@ row(OK if oll["ok"] else WARN, "ollama",
 if oll["ok"] and not oll["tools"]:
     row(WARN, "ollama tools", f"{oll['model']} cannot call tools — "
                               "`ollama pull llama3.2:3b`")
+gem = ms["providers"]["gemini"]
+row(OK if gem["ok"] else WARN, "gemini",
+    f"{gem['model']}  ({len(gem['available'])} models available)" if gem["ok"]
+    else gem["why"][:100])
 row(OK if ms["providers"]["anthropic"]["ok"] else WARN, "anthropic",
     "key set" if ms["providers"]["anthropic"]["ok"] else "no key (optional)")
 
