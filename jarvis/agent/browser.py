@@ -36,30 +36,77 @@ PROFILE = Path(os.environ.get(
     "JARVIS_CHROME_PROFILE",
     str(Path(__file__).resolve().parent.parent / "chrome-profile")))
 
+# Any Chromium-based browser speaks the DevTools Protocol, so Chrome is not
+# required — Brave, Edge, Arc, Vivaldi and Chromium all work identically.
+# Assuming Chrome specifically is a bad bet on a Mac, where plenty of people
+# only have Safari (which has no CDP and cannot be driven this way).
+
 WINDOWS_CHROME = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+    os.path.expandvars(r"%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+    os.path.expandvars(r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe"),
+    os.path.expandvars(r"%LOCALAPPDATA%\Chromium\Application\chrome.exe"),
+]
+
+MAC_APPS = [
+    ("Google Chrome", "Google Chrome"),
+    ("Google Chrome Canary", "Google Chrome Canary"),
+    ("Brave Browser", "Brave Browser"),
+    ("Microsoft Edge", "Microsoft Edge"),
+    ("Chromium", "Chromium"),
+    ("Arc", "Arc"),
+    ("Vivaldi", "Vivaldi"),
+    ("Opera", "Opera"),
 ]
 
 
+def _mac_candidates() -> list[str]:
+    out = []
+    for folder in ("/Applications", os.path.expanduser("~/Applications")):
+        for app, binary in MAC_APPS:
+            path = f"{folder}/{app}.app/Contents/MacOS/{binary}"
+            if os.path.isfile(path):
+                out.append(path)
+    return out
+
+
 def _chrome_binary() -> str | None:
-    if os.environ.get("JARVIS_CHROME_BIN"):
-        return os.environ["JARVIS_CHROME_BIN"]
+    explicit = os.environ.get("JARVIS_CHROME_BIN", "").strip()
+    if explicit:
+        return explicit if os.path.isfile(explicit) else None
     if sys.platform == "win32":
         for p in WINDOWS_CHROME:
             if os.path.isfile(p):
                 return p
         return None
-    for name in ("google-chrome", "chromium", "chromium-browser", "chrome"):
-        found = shutil.which(name)
-        if found:
-            return found
-    for p in ("/opt/pw-browsers/chromium/chrome-linux/chrome",
-              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"):
+    if sys.platform == "darwin":
+        found = _mac_candidates()
+        return found[0] if found else None
+    for name in ("google-chrome", "chromium", "chromium-browser", "chrome",
+                 "brave-browser", "microsoft-edge"):
+        got = shutil.which(name)
+        if got:
+            return got
+    for p in ("/opt/pw-browsers/chromium/chrome-linux/chrome",):
         if os.path.isfile(p):
             return p
     return None
+
+
+def _no_browser_reason() -> str:
+    if sys.platform == "darwin":
+        return ("No Chromium-based browser found. JARVIS can drive Chrome, "
+                "Brave, Edge, Arc, Vivaldi or Chromium — but NOT Safari, "
+                "which has no DevTools Protocol. Install one (Chrome from "
+                "google.com/chrome is the safe choice) and try again, or set "
+                "JARVIS_CHROME_BIN to the binary inside the .app bundle.")
+    if sys.platform == "win32":
+        return ("No Chromium-based browser found. Install Chrome, Brave or "
+                "Edge, or set JARVIS_CHROME_BIN to the .exe.")
+    return ("No Chromium-based browser found. Install chromium or "
+            "google-chrome, or set JARVIS_CHROME_BIN.")
 
 
 # ---------------------------------------------------------------- http side
@@ -90,11 +137,15 @@ def status() -> dict:
         except Exception as e:                              # noqa: BLE001
             return {"connected": False, "port": PORT, "binary": binary,
                     "reason": f"debug port answered oddly: {e}"}
+    if not binary:
+        return {"connected": False, "port": PORT, "binary": None,
+                "profile": str(PROFILE), "reason": _no_browser_reason()}
     return {
         "connected": False, "port": PORT, "binary": binary,
         "profile": str(PROFILE),
-        "reason": (f"Chrome is not listening on {PORT}. Start it with "
-                   f"`python3 agent/browser.py launch`, or run Chrome yourself "
+        "reason": (f"{os.path.basename(binary)} is not listening on {PORT}. "
+                   "Start it with "
+                   f"`python3 agent/browser.py launch`, or run it yourself "
                    f"with --remote-debugging-port={PORT} "
                    f"--user-data-dir=\"{PROFILE}\". Note that Chrome ignores "
                    f"the debug port on your default profile, so a separate "
@@ -109,8 +160,10 @@ def launch(url: str = "about:blank", origin: str = PRINCIPAL) -> dict:
         return {"ok": True, "already": True, **status()}
     binary = _chrome_binary()
     if not binary:
-        return {"ok": False, "reason": "Chrome not found. Set JARVIS_CHROME_BIN "
-                                       "to chrome.exe."}
+        return {"ok": False, "reason": _no_browser_reason(),
+                "looked_in": (_mac_candidates() or
+                              ["/Applications", "~/Applications"])
+                             if sys.platform == "darwin" else None}
     PROFILE.mkdir(parents=True, exist_ok=True)
     cmd = [binary, f"--remote-debugging-port={PORT}",
            f"--user-data-dir={PROFILE}", "--no-first-run",
