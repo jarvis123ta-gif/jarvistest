@@ -31,7 +31,7 @@ const S = {
   source: null, proc: null, pcm: [], capturing: false,
   levelTimer: null,
   lastVoice: 0, speechStart: 0, heardSpeech: false,
-  audio: null, level: 0, status: null,
+  audio: null, level: 0, status: null, audioUnlocked: false,
   armed: true, acting: false,
 };
 
@@ -501,13 +501,37 @@ async function speak(text) {
       setState('idle');
       return resumeListening();
     }
-    const url = URL.createObjectURL(await res.blob());
+    const blob = await res.blob();
+    if (!blob.size) {
+      alertLoud('The voice returned no audio. Nothing to play.', 'warn');
+      setState('idle');
+      return resumeListening();
+    }
+    const url = URL.createObjectURL(blob);
     await new Promise(done => {
       S.audio = new Audio(url);
-      S.audio.onended = S.audio.onerror = () => {
+      S.audio.onended = () => {
         URL.revokeObjectURL(url); S.audio = null; done();
       };
-      S.audio.play().catch(() => done());
+      S.audio.onerror = () => {
+        URL.revokeObjectURL(url); S.audio = null;
+        alertLoud('The browser could not decode that audio.', 'warn');
+        done();
+      };
+      /* A rejected play() is almost always the browser refusing to make
+         sound before you have interacted with the page. Reporting it is the
+         whole point — silently giving up here is what made JARVIS look
+         mute when it was working perfectly. */
+      S.audio.play().then(() => { S.audioUnlocked = true; }).catch(err => {
+        URL.revokeObjectURL(url); S.audio = null;
+        if (err && err.name === 'NotAllowedError') {
+          alertLoud('Your browser is blocking audio until you interact with '
+            + 'the page. Click anywhere here, then ask again.', 'warn');
+        } else {
+          alertLoud('Could not play the audio: ' + (err && err.message || err), 'warn');
+        }
+        done();
+      });
     });
   } catch (e) {
     alertLoud('Speech failed: ' + e.message, 'warn');
@@ -785,7 +809,22 @@ function rotateExample() {
   }, 5200);
 }
 
+/* Browsers gate audio behind a user gesture. Spend the first one on a
+   silent play so the first real answer is audible. */
+function unlockAudio() {
+  if (S.audioUnlocked) return;
+  try {
+    const a = new Audio(
+      'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAA' +
+      'ZGF0YQAAAAA=');
+    a.volume = 0;
+    a.play().then(() => { S.audioUnlocked = true; }).catch(() => {});
+  } catch (e) { /* nothing to do; speak() will report it if it matters */ }
+}
+
 function wire() {
+  ['pointerdown', 'keydown'].forEach(ev =>
+    document.addEventListener(ev, unlockAudio, { once: true }));
   $('#ask').addEventListener('keydown', e => {
     if (e.key === 'Enter') ask($('#ask').value);
   });
