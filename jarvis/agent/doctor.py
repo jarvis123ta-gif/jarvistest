@@ -48,8 +48,15 @@ def safe(fn, label: str):
 section("machine")
 row(OK, "platform", f"{platform.system()} {platform.release()} ({platform.machine()})")
 row(OK, "python", sys.version.split()[0] + f"  ({sys.executable})")
-if sys.version_info < (3, 10):
-    row(BAD, "python version", "3.10 or newer is required")
+# Every module carries `from __future__ import annotations` and none uses
+# match statements, so 3.9 genuinely works. 3.10+ is still worth having.
+if sys.version_info < (3, 9):
+    row(BAD, "python version", "3.9 or newer is required")
+elif sys.version_info < (3, 10):
+    row(WARN, "python version",
+        f"{sys.version_info.major}.{sys.version_info.minor} works, but it is "
+        "Apple's stock build and now unsupported upstream. "
+        "`brew install python@3.12` when convenient.")
 
 # ---------------------------------------------------------------- config
 

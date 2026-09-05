@@ -102,18 +102,32 @@ def _key(name: str) -> str:
 
 # ---------------------------------------------------------------- probing
 
-WHISPER_NAMES = ["whisper-cli", "whisper-cli.exe", "main.exe", "whisper.exe",
-                 "whisper-cpp", "whisper"]
+WHISPER_NAMES = ["whisper-cli", "whisper-cpp", "whisper", "main",
+                 "whisper-cli.exe", "whisper.exe", "main.exe"]
+
+
+# A process started from a GUI, or from a shell whose profile has not been
+# re-read, often lacks Homebrew's bin directory on PATH — so the binary is
+# installed and invisible. Look in the usual places directly.
+WHISPER_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin",
+                "~/.local/bin", "~/bin"]
 
 
 def find_whisper() -> str | None:
     explicit = os.environ.get("JARVIS_WHISPER_BIN", "").strip()
     if explicit:
-        return explicit if os.path.isfile(explicit) or shutil.which(explicit) else None
+        p = os.path.expanduser(explicit)
+        return p if os.path.isfile(p) else (shutil.which(explicit) or None)
     for n in WHISPER_NAMES:
         found = shutil.which(n)
         if found:
             return found
+    for d in WHISPER_DIRS:
+        d = os.path.expanduser(d)
+        for n in WHISPER_NAMES:
+            p = os.path.join(d, n)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
     return None
 
 

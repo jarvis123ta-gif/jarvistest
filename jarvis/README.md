@@ -125,7 +125,12 @@ Chrome against its own profile folder:
 ```bash
 python3 agent/browser.py launch      # starts Chrome with the port open
 python3 agent/browser.py tabs        # see what it can see
+python3 agent/browser.py open URL    # open a tab in it
 ```
+
+If you close its window by hand, the browser keeps running with no page —
+the debug port answers but there is nothing to drive, which looks exactly
+like nothing happening. `launch` notices and opens a tab.
 
 Log into your accounts once in that window; the profile persists. Nothing
 touches your normal Chrome profile.

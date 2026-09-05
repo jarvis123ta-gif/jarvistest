@@ -184,11 +184,25 @@ def status() -> dict:
     }
 
 
+def _ensure_tab(url: str, origin: str) -> bool:
+    """A running browser with zero page targets can be driven by nobody.
+    Give it one."""
+    if tabs(quiet=True):
+        return False
+    r = new_tab(url or "about:blank", origin=origin)
+    time.sleep(0.4)
+    return bool(r.get("ok"))
+
+
 def launch(url: str = "about:blank", origin: str = PRINCIPAL) -> dict:
     """Start Chrome with the debug port open, against JARVIS's own profile."""
     control.guard("browser", "launch chrome", {"url": url}, origin)
     if reachable():
-        return {"ok": True, "already": True, **status()}
+        # Already up. It may still have no page — a window closed by hand
+        # leaves the process running with nothing to drive, which looks
+        # exactly like "it isn't opening any tabs".
+        made = _ensure_tab(url, origin)
+        return {"ok": True, "already": True, "opened_tab": made, **status()}
     binary = _chrome_binary()
     if not binary:
         return {"ok": False, "reason": _no_browser_reason(),
@@ -208,8 +222,28 @@ def launch(url: str = "about:blank", origin: str = PRINCIPAL) -> dict:
     for _ in range(40):
         time.sleep(0.25)
         if reachable():
+            _ensure_tab(url, origin)
             return {"ok": True, "already": False, **status()}
-    return {"ok": False, "reason": "Chrome started but never opened the debug port."}
+    return {"ok": False,
+            "reason": f"{os.path.basename(binary)} started but never opened "
+                      f"the debug port on {PORT}. Another instance may already "
+                      "be using that profile — quit it and try again."}
+
+
+def new_tab(url: str = "about:blank", origin: str = PRINCIPAL) -> dict:
+    """Open a tab. Chrome 111+ requires PUT on /json/new; older builds
+    accept GET, so both are tried."""
+    control.guard("browser", "open tab", {"url": url}, origin)
+    target = f"http://127.0.0.1:{PORT}/json/new?{urllib.parse.quote(url, safe='')}"
+    for method in ("PUT", "GET"):
+        try:
+            req = urllib.request.Request(target, method=method)
+            with urllib.request.urlopen(req, timeout=8) as r:
+                t = json.loads(r.read() or b"{}")
+            return {"ok": True, "id": t.get("id"), "url": t.get("url", url)}
+        except Exception as e:                              # noqa: BLE001
+            last = e
+    return {"ok": False, "reason": f"could not open a tab: {last}"}
 
 
 def tabs(quiet: bool = False) -> list[dict]:
@@ -446,7 +480,10 @@ def run_js(expression: str, target: str | None = None, origin: str = PRINCIPAL) 
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
-    if cmd == "launch":
+    if cmd == "open":
+        print(json.dumps(new_tab(sys.argv[2] if len(sys.argv) > 2
+                                 else "about:blank"), indent=2))
+    elif cmd == "launch":
         print(json.dumps(launch(sys.argv[2] if len(sys.argv) > 2 else "about:blank"), indent=2))
     elif cmd == "tabs":
         for t in tabs():
