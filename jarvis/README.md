@@ -244,11 +244,18 @@ worked perfectly.
 | `os` | **nothing**, Windows only | built-in recogniser, less accurate |
 
 **Speech-out works on every OS with nothing installed.** Only listening
-needs setting up:
+needs setting up, and it is two steps, not one — whisper.cpp ships the
+program without any weights:
 
 ```bash
-brew install whisper-cpp          # macOS
+brew install whisper-cpp
+curl -L --create-dirs -o ~/.cache/whisper/ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
 ```
+
+The model is found automatically in the usual places, preferring `base.en`
+— accurate enough, and fast on a laptop. Point elsewhere with
+`JARVIS_WHISPER_MODEL`.
 
 The probe says exactly what is missing and how to fix it. Pin a tier by
 naming it instead of `auto`.

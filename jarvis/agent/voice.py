@@ -117,9 +117,39 @@ def find_whisper() -> str | None:
     return None
 
 
+# whisper.cpp ships no weights: `brew install whisper-cpp` gives you the
+# program and nothing to run. Rather than fail obscurely, look where the
+# model usually ends up.
+MODEL_DIRS = ["~/.cache/whisper", "~/Library/Application Support/whisper",
+              "~/whisper", "~/models", "~/Downloads",
+              "/opt/homebrew/share/whisper-cpp/models",
+              "/usr/local/share/whisper-cpp/models",
+              "/usr/share/whisper.cpp/models"]
+MODEL_PREF = ("base.en", "small.en", "medium.en", "base", "small", "tiny.en", "tiny")
+
+
 def find_whisper_model() -> str | None:
     m = os.environ.get("JARVIS_WHISPER_MODEL", "").strip()
-    return m if m and os.path.isfile(m) else None
+    if m:
+        return m if os.path.isfile(os.path.expanduser(m)) else None
+    found: list[str] = []
+    for d in MODEL_DIRS:
+        d = os.path.expanduser(d)
+        if not os.path.isdir(d):
+            continue
+        try:
+            found += [os.path.join(d, f) for f in os.listdir(d)
+                      if f.startswith("ggml-") and f.endswith(".bin")]
+        except OSError:
+            continue
+    if not found:
+        return None
+    # Prefer accuracy that still runs fast on a laptop.
+    for want in MODEL_PREF:
+        for f in found:
+            if os.path.basename(f) == f"ggml-{want}.bin":
+                return f
+    return found[0]
 
 
 def find_os_stt() -> tuple[str, str] | None:
@@ -179,9 +209,16 @@ def probe() -> dict:
                        "speak": bool(_key("ELEVENLABS_API_KEY")),
                        "in": "scribe_v1", "out": "eleven_turbo_v2_5",
                        "why": "" if _key("ELEVENLABS_API_KEY") else "ELEVENLABS_API_KEY not set"},
-        "whispercpp": {"ok": bool(whisper), "listen": bool(whisper),
-                       "speak": False, "in": whisper or None, "model": model,
-                       "why": "" if whisper else f"whisper.cpp not found — {hint}"},
+        "whispercpp": {
+            "ok": bool(whisper and model), "listen": bool(whisper and model),
+            "speak": False, "in": whisper or None, "model": model,
+            "why": ("" if (whisper and model) else
+                    (f"whisper.cpp not found — {hint}" if not whisper else
+                     "whisper.cpp is installed but has no model file. It ships "
+                     "without one. Download it:\n"
+                     "  curl -L -o ~/.cache/whisper/ggml-base.en.bin --create-dirs "
+                     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
+                     "ggml-base.en.bin"))},
         "os": {"ok": bool(ossr), "listen": bool(ossr), "speak": False,
                "in": (ossr[0] if ossr else None),
                "why": "" if ossr else
@@ -378,13 +415,14 @@ def transcribe(audio: bytes, mime: str = "audio/wav") -> dict:
                 return {"ok": False, "provider": "whispercpp",
                         "error": probe()["whispercpp"]["why"]}
             model = find_whisper_model()
+            if not model:
+                return {"ok": False, "provider": "whispercpp",
+                        "error": probe()["whispercpp"]["why"]}
             tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             tmp.write(audio)
             tmp.close()
             try:
-                cmd = [binary, "-f", tmp.name, "-nt", "-np"]
-                if model:
-                    cmd += ["-m", model]
+                cmd = [binary, "-f", tmp.name, "-nt", "-np", "-m", model]
                 out = subprocess.run(cmd, capture_output=True, timeout=180)
                 text = out.stdout.decode("utf-8", "replace").strip()
                 if not text and out.returncode != 0:
