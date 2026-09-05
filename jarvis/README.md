@@ -48,10 +48,10 @@ Ten tools:
 
 ## Control — Chrome and the machine
 
-**This is the part that is not read-only.** JARVIS can drive your browser and,
-on Windows, your machine: navigate, click, fill fields, type, press key
-chords, move the mouse, capture the screen. That means it can send the email,
-place the order, delete the file.
+**This is the part that is not read-only.** JARVIS can drive your browser and
+your machine — **Windows and macOS both** — navigating, clicking, filling
+fields, typing, pressing key chords, moving the mouse and capturing the
+screen. That means it can send the email, place the order, delete the file.
 
 That was chosen deliberately. What follows is what stands between that power
 and a bad afternoon.
@@ -81,7 +81,7 @@ Three ways, all instant:
 
 | | |
 | --- | --- |
-| **CTRL+ALT+Q** | Anywhere in Windows, even while the mouse is moving. This is the one that matters — when something else is driving the cursor, reaching a button on screen is exactly what you cannot do. |
+| **CTRL+ALT+Q** | Anywhere in Windows, even while the mouse is moving. This is the one that matters — when something else is driving the cursor, reaching a button on screen is exactly what you cannot do. macOS has no global hotkey here, so on a Mac use Esc or the Halt button. |
 | **Esc** | In the JARVIS page. Stops the voice and the hands together. |
 | **Halt button** | Bottom right of the ask bar. |
 
@@ -100,6 +100,21 @@ tail -f memory/actions.log
 ```
 
 If something odd ever happens, that file says exactly what and why.
+
+### macOS permissions
+
+macOS will not let any program move your mouse or press keys without an
+explicit grant, which is correct. Two switches:
+
+| Panel | Enables |
+| --- | --- |
+| **Privacy & Security → Accessibility** | mouse, keyboard, window focus |
+| **Privacy & Security → Screen Recording** | screenshots |
+
+Grant them to **the app you launch JARVIS from** — Terminal, iTerm, VS Code —
+not to Python; the permission follows the host application. Restart JARVIS
+afterwards. Until then it reports itself unavailable and quotes the exact
+panel, rather than silently doing nothing.
 
 ### Attaching Chrome
 
@@ -398,7 +413,9 @@ jarvis/
 │   ├── data.py       THE ONLY FILE THAT TOUCHES REAL DATA
 │   ├── connectors.py Drive, Gmail, Calendar, Shopify — read-only, modular
 │   ├── browser.py    Chrome, via DevTools Protocol — reads AND acts
-│   ├── desktop.py    Windows mouse, keyboard, windows, screen — reads AND acts
+│   ├── desktop.py    front door; picks a backend and gates the origin rule
+│   ├── desktop_windows.py  user32/gdi32 via ctypes
+│   ├── desktop_macos.py    Quartz via ctypes, osascript, screencapture
 │   ├── control.py    kill switch, action log, origin rule
 │   ├── wsock.py      a minimal WebSocket client, so CDP needs no package
 │   ├── tz.py         timezones without tzdata, for Windows

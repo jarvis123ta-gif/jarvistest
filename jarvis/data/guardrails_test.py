@@ -98,10 +98,16 @@ for surface, fn in (("browser.click", lambda: browser.click("x", origin=control.
 
 # Every action path must pass through the gate. A new surface that forgets
 # to call control.guard would be invisible to the kill switch.
-for mod in ("browser.py", "desktop.py"):
+for mod in ("browser.py", "desktop_windows.py", "desktop_macos.py"):
     src = (AGENT / mod).read_text()
     calls = src.count("control.guard(")
     check(f"{mod} routes actions through control.guard", calls >= 5, f"{calls} gated calls")
+
+# The dispatcher must gate too, so no platform check can short-circuit the
+# origin rule before it is applied.
+disp = (AGENT / "desktop.py").read_text()
+check("desktop.py gates at the front door too", disp.count("_gate(origin") >= 8,
+      f"{disp.count('_gate(origin')} gated entry points")
 
 control.disarm("guardrail test")
 try:

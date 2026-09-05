@@ -438,10 +438,12 @@ def main() -> None:
     print(f"chrome: {'attached on ' + str(b['port']) if b['connected'] else 'NOT ATTACHED'}"
           + ("" if b["connected"] else f" — {b['reason'][:90]}"))
     d = desktop.status()
-    print(f"desktop:{' available ' + str(d.get('screen')) if d['connected'] else ' UNAVAILABLE — ' + d['reason']}")
     if d["connected"]:
+        print(f"desktop: {d.get('backend')} — {d.get('screen')}")
         pk = desktop.start_panic_key()
-        print(f"panic:  {pk.get('combo', 'unavailable')} disarms everything")
+        print(f"panic:  {pk['combo'] + ' disarms everything' if pk.get('combo') else pk.get('reason', '')}")
+    else:
+        print(f"desktop: UNAVAILABLE — {d['reason']}")
     print(f"control: armed={control.armed()}   log={control.LOG}")
     for c in connectors.status_all():
         mark = "ok" if c["connected"] else "NOT CONNECTED"
