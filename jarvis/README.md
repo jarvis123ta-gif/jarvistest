@@ -377,6 +377,21 @@ so it is called out by name.
 
 ---
 
+## The fast path
+
+Most of what you ask is a command, not a question. "Brief me", "what's due",
+"how's the store", "inbox", "plan my day" — the tool already writes a good
+spoken sentence for those, and having a model rewrite it costs seconds and
+adds nothing.
+
+Those phrasings skip the model entirely and answer in about a millisecond.
+The card says `instant — no model needed`.
+
+The match is deliberately tight: it fires on the exact command phrasings and
+nothing else. "What's due" is a command; "why is that due before the other
+one" is a question and still goes to the model, because judgement is what
+the model is for. `JARVIS_FAST=0` turns it off.
+
 ## When it feels slow
 
 Every answer prints where its time went, under the card:

@@ -153,6 +153,54 @@ DIRECT = [
      "__halt", {}),
 ]
 
+# ------------------------------------------------------------------ the fast path
+#
+# A local model spends seconds rewriting a sentence the tool already wrote
+# well. These phrasings are unambiguous commands, not conversation, so they
+# skip the model entirely and answer in milliseconds. Anything not on this
+# list still goes to the model, because judgement is what the model is for.
+#
+# Deliberately tighter than DIRECT below: this must never swallow a real
+# question. "what is due" is a command; "why is that due before the other
+# one" is not.
+
+FAST = [
+    (re.compile(r"^\s*(brief me|briefing|brief|catch me up|status report|"
+                r"what.s (going )?on)\s*[?.!]?\s*$", re.I), "brief_me", {}),
+    (re.compile(r"^\s*(plan (my |the )?day|what.s first|what should i do( "
+                r"first| now)?|priorities|what needs my attention( first)?)"
+                r"\s*[?.!]?\s*$", re.I), "plan_day", {}),
+    (re.compile(r"^\s*(what.s due|what is due|deadlines|what.s coming up|"
+                r"what.s overdue|due this week|what do i owe)\s*[?.!]?\s*$",
+                re.I), "deadlines", {}),
+    (re.compile(r"^\s*(how.s the store|how is the store|store|shopify|"
+                r"orders|any orders|store status)\s*[?.!]?\s*$", re.I),
+     "store_status", {}),
+    (re.compile(r"^\s*(inbox|my inbox|check (my )?(mail|email|inbox)|"
+                r"any (mail|email)|unread)\s*[?.!]?\s*$", re.I),
+     "read_inbox", {}),
+    (re.compile(r"^\s*(what tabs are open|my tabs|tabs|what.s open)"
+                r"\s*[?.!]?\s*$", re.I), "browser", {"action": "tabs"}),
+    (re.compile(r"^\s*(stop|halt|freeze|hands off|stop it)\s*[?.!]?\s*$",
+                re.I), "__halt", {}),
+]
+
+
+def fast_enabled() -> bool:
+    return os.environ.get("JARVIS_FAST", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def fast_route(text: str):
+    """Returns (tool_name, args) for an unambiguous command, else None."""
+    if not fast_enabled():
+        return None
+    for rx, name, args in FAST:
+        if rx.match(text):
+            return name, dict(args)
+    return None
+
+
 SMALL_TALK = {
     "hear": "Loud and clear, Sir.",
     "hello": "Here, Sir.",
@@ -247,6 +295,28 @@ def ask(text: str, sid: str) -> dict:
     if not text:
         return {"spoken": "I didn't catch that, Sir.", "card": None,
                 "mode": "conversation", "model": have_model()}
+
+    # A command the tool already answers well: skip the model entirely.
+    quick = fast_route(text)
+    if quick:
+        name, args = quick
+        t0 = time.time()
+        if name == "__halt":
+            control.disarm("asked to stop")
+            return {"spoken": "Stopped, Sir. Hands off everything until you re-arm.",
+                    "card": {"kind": "halted", "surface": "all",
+                             "control": control.status()},
+                    "cards": [], "mode": "fast", "tool": None, "model": False,
+                    "fast": True, "timing": {"fast": True}}
+        res = tools.dispatch(name, args, vault)
+        hist = history(sid)
+        hist.append({"role": "user", "text": text})
+        hist.append({"role": "assistant", "text": res["spoken"]})
+        return {"spoken": res["spoken"], "card": res["card"],
+                "cards": [res["card"]], "tools": [name], "tool": name,
+                "mode": "fast", "model": False, "fast": True,
+                "ms": int((time.time() - t0) * 1000),
+                "timing": {"fast": True}}
 
     if not have_model():
         out = fallback_route(text, vault)

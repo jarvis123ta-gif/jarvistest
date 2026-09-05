@@ -282,6 +282,7 @@ async function ask(text) {
 function timingLine(r) {
   const t = r.timing || {};
   const bits = [];
+  if (r.fast) bits.push('instant \u2014 no model needed');
   if (S.lastListenMs) bits.push(`heard ${(S.lastListenMs / 1000).toFixed(1)}s`);
   if (t.prompt) bits.push(`read ${(t.prompt / 1000).toFixed(1)}s`);
   if (t.generate) bits.push(`thought ${(t.generate / 1000).toFixed(1)}s`);
