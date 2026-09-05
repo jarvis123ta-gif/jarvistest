@@ -436,6 +436,43 @@ Pin one with `JARVIS_GEMINI_MODEL`.
 All three call tools identically; the schemas are converted per provider, so
 adding a fourth is a function, not a rewrite.
 
+## Noticing things
+
+Answering a question is not managing. Managing is saying *"the chemistry lab
+went overdue an hour ago"* before you think to ask.
+
+Every ten minutes JARVIS takes a snapshot of what is worth watching —
+deadlines, orders, stock, mail — and reports **only what changed**. Notices
+appear top-right and the most urgent one is spoken, if voice is on and you
+have not muted it.
+
+That design gives three properties that matter more than cleverness:
+
+- **It cannot nag.** A thing is reported once, when it changes, and then it
+  is part of the baseline.
+- **It cannot invent.** Every notice names the real record behind it.
+- **It survives a restart.** The baseline lives in `memory/watch.json`, so
+  closing your laptop does not produce a flood of stale news in the morning.
+
+The first run of a fresh install records the baseline and says nothing at
+all — which is correct, and the easy thing to get wrong.
+
+What is worth interrupting for:
+
+| | |
+| --- | --- |
+| A deadline going overdue | high |
+| A deadline crossing inside two days | high |
+| An order past the fulfilment window | high |
+| New work already due within a week | normal |
+| A new order, or stock running low | normal |
+| Mail from a teacher or the DECA advisor | normal |
+
+A distant deadline merely ticking down says nothing. An order being
+fulfilled says nothing — good news is not an interruption. Set
+`JARVIS_WATCH_MINUTES=0` to switch it off, or `POST /api/watch` to force a
+look now.
+
 ## The fast path
 
 Most of what you ask is a command, not a question. "Brief me", "what's due",
@@ -560,6 +597,8 @@ jarvis/
 | `POST /api/speak` | `{text}` → mp3 bytes |
 | `POST /api/reindex` | rebuild the index |
 | `GET /api/actions` | the action log, newest first |
+| `GET /api/notices` | anything noticed since you last looked |
+| `POST /api/watch` | look around now instead of waiting |
 | `POST /api/control` | `{armed: false}` halts everything; `{armed: true}` re-arms |
 
 The server binds `127.0.0.1` only.

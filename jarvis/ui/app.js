@@ -32,7 +32,7 @@ const S = {
   levelTimer: null,
   lastVoice: 0, speechStart: 0, heardSpeech: false,
   audio: null, level: 0, status: null, audioUnlocked: false,
-  lastListenMs: 0, lastSpeakMs: 0,
+  lastListenMs: 0, lastSpeakMs: 0, notices: [],
   armed: true, acting: false,
 };
 
@@ -296,6 +296,43 @@ function timingLine(r) {
   if (c && c.known && c.usd) bits.push(`$${c.usd.toFixed(3)} this run`);
   if (!bits.length) return '';
   return `<div class="timing">${bits.join('  ·  ')}</div>`;
+}
+
+/* ---- noticing things without being asked ------------------------
+   The watcher decides WHAT is worth saying; this decides how loudly. A
+   notice that interrupts you for something you already knew is worse than
+   no notice at all, so nothing is repeated and nothing is invented here. */
+
+async function pollNotices() {
+  let r;
+  try {
+    r = await (await fetch('/api/notices')).json();
+  } catch (e) { return; }
+  if (!r.notices || !r.notices.length) return;
+
+  S.notices = r.notices.concat(S.notices).slice(0, 12);
+  paintNotices();
+
+  // Say the most urgent one, if it can speak and you have not muted it.
+  const top = r.notices[0];
+  const canSpeak = S.status && S.status.voice && S.status.voice.speak
+                   && S.status.voice.speak.ok;
+  if (top && canSpeak && !S.muted && S.state === 'idle') {
+    const more = r.notices.length - 1;
+    speak(top.spoken + (more > 0 ? ` And ${more} other${more > 1 ? 's' : ''}.` : ''));
+  }
+}
+
+function paintNotices() {
+  const box = $('#notices');
+  const n = S.notices.length;
+  $('#noticeCount').textContent = n ? String(n) : '';
+  $('#noticeBar').hidden = !n;
+  box.innerHTML = S.notices.map(x =>
+    `<div class="notice ${esc(x.level)}">
+       <span class="when">${esc((x.at || '').slice(11, 16))}</span>
+       <span class="what">${esc(x.spoken)}</span>
+     </div>`).join('');
 }
 
 /* ================================================================ cards */
@@ -898,6 +935,9 @@ function wire() {
   });
 
   setInterval(loadStatus, 30000);
+  setInterval(pollNotices, 45000);
+  setTimeout(pollNotices, 4000);
+  $('#noticeClear').onclick = () => { S.notices = []; paintNotices(); };
 }
 
 boot();

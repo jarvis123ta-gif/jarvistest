@@ -293,3 +293,32 @@ html, body {
   font-size: 9.5px; letter-spacing: .06em; color: var(--ink-mute);
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- things noticed without being asked -------------------------
+   Loud enough to catch the eye from across the room, quiet enough that a
+   normal week does not look like an emergency. */
+
+#noticeBar .label { display: flex; align-items: center; gap: 7px; }
+#noticeBar .count {
+  color: var(--accent); font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+#noticeBar .clear {
+  margin-left: auto; font: inherit; font-size: 8.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-mute); background: none;
+  border: 0; cursor: pointer; padding: 0;
+}
+#noticeBar .clear:hover { color: var(--ink); }
+
+.notice {
+  display: flex; gap: 8px; padding: 5px 0; font-size: 11px;
+  border-top: 1px solid var(--line-soft); line-height: 1.45;
+}
+.notice:first-child { border-top: 0; }
+.notice .when {
+  color: var(--ink-mute); flex: none; font-variant-numeric: tabular-nums;
+  font-size: 10px; padding-top: 1px;
+}
+.notice .what { flex: 1 1 auto; color: var(--ink-dim); }
+.notice.high .what { color: var(--ink); }
+.notice.high .when { color: var(--warn); }

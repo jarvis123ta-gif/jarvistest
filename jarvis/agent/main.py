@@ -38,6 +38,7 @@ import llm                      # noqa: E402
 import memory                   # noqa: E402
 import tools                    # noqa: E402
 import tz                       # noqa: E402
+import watch                    # noqa: E402
 import voice                    # noqa: E402
 from vault import Vault         # noqa: E402
 
@@ -45,6 +46,9 @@ data.load_env_file()
 
 PORT = int(os.environ.get("JARVIS_PORT", "8720"))
 MAX_TURNS = 10                  # how much conversation is kept
+# How often to look for things worth mentioning unprompted. Long enough that
+# it is never a drain, short enough that "just went overdue" means it.
+WATCH_EVERY = int(os.environ.get("JARVIS_WATCH_MINUTES", "10")) * 60
 MAX_TOOL_ROUNDS = 4
 
 # ------------------------------------------------------------------ state
@@ -452,6 +456,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/actions":
                 return self._json({"actions": control.recent(60),
                                    **control.status()})
+            if path == "/api/notices":
+                return self._json({"notices": watch.pending(clear=True),
+                                   **watch.status()})
             return self.serve_static(path)
         except Exception:                                   # noqa: BLE001
             traceback.print_exc()
@@ -529,6 +536,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(control.arm())
                 return self._json(control.status())
 
+            if path == "/api/watch":
+                v = VAULT or build_vault()
+                found = watch.check(v)
+                return self._json({"ok": True, "found": len(found),
+                                   "notices": found, **watch.status()})
+
             if path == "/api/reindex":
                 v = build_vault()
                 return self._json({"ok": True, "notes": len(v.notes),
@@ -543,6 +556,24 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:                              # noqa: BLE001
             traceback.print_exc()
             return self._json({"error": str(e)}, 500)
+
+
+def watcher_loop() -> None:
+    """Look around every so often and remember anything worth saying.
+
+    Deliberately quiet on failure: a watcher that crashes the server, or
+    spams the log because Gmail hiccuped, is worse than no watcher.
+    """
+    time.sleep(20)                         # let the first index finish
+    while True:
+        try:
+            found = watch.check(VAULT or build_vault())
+            if found and os.environ.get("JARVIS_VERBOSE"):
+                print(f"  watch: {len(found)} new")
+        except Exception as e:             # noqa: BLE001
+            if os.environ.get("JARVIS_VERBOSE"):
+                print(f"  watch failed: {e}")
+        time.sleep(WATCH_EVERY)
 
 
 def main() -> None:
@@ -582,6 +613,11 @@ def main() -> None:
     note = tz.fallback_note()
     if note:
         print(f"!! tz:  {note}")
+    if WATCH_EVERY > 0:
+        threading.Thread(target=watcher_loop, daemon=True,
+                         name="jarvis-watch").start()
+        print(f"watch:  every {WATCH_EVERY // 60} min "
+              f"— tells you what changed without being asked")
     print(f"\n  http://localhost:{PORT}\n")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 
