@@ -289,8 +289,11 @@ function timingLine(r) {
   if (t.load > 200) bits.push(`loaded ${(t.load / 1000).toFixed(1)}s`);
   if (S.lastSpeakMs) bits.push(`spoke ${(S.lastSpeakMs / 1000).toFixed(1)}s`);
   if (r.ms) bits.push(`${(r.ms / 1000).toFixed(1)}s total`);
+  if (t.cached) bits.push(`${t.cached} cached`);
   if (t.tokens_per_sec) bits.push(`${t.tokens_per_sec} tok/s`);
   if (r.model_name) bits.push(esc(r.model_name));
+  const c = S.status && S.status.model && S.status.model.cost;
+  if (c && c.known && c.usd) bits.push(`$${c.usd.toFixed(3)} this run`);
   if (!bits.length) return '';
   return `<div class="timing">${bits.join('  ·  ')}</div>`;
 }

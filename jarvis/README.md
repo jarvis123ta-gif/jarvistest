@@ -431,13 +431,23 @@ draws the graph and answers by scoring your files — it just says so.
 | `claude-haiku-4-5` | $1.00 | $5.00 |
 
 A turn sends the system prompt, `CLAUDE.md`, recent memory and the last ten
-turns — roughly 2–4k input tokens — and gets back a couple of hundred. On the
-default model that is somewhere around one to two cents a turn, more when a
-tool round-trips. `GET /api/status` reports the running token count.
+turns — roughly 2–4k input tokens — and gets back a couple of hundred.
 
-Two levers if that matters: `JARVIS_MODEL=claude-haiku-4-5` for a fifth of the
-price, and `JARVIS_EFFORT` (`low` by default here, because spoken conversation
-wants speed more than deliberation).
+**The system prompt and tool definitions are cached**, since they are
+identical on every turn and are most of the input. That takes a turn from
+roughly 1.8c to 0.6c on Opus 5. The running total and the cached-token count
+are shown under each answer and in `GET /api/status`.
+
+Three levers if cost matters:
+
+- **`JARVIS_FAST`** (on by default) — commands answer from the tool with no
+  model call at all. Free and instant, whatever model is configured. For a
+  command centre this is most of what you ask.
+- **`JARVIS_MODEL=claude-haiku-4-5`** — about a fifth of the price.
+- **`JARVIS_EFFORT`** — `low` by default, because spoken conversation wants
+  speed more than deliberation.
+
+Or run Ollama and pay nothing at all.
 
 **Voice**, at OpenAI's published rates: `whisper-1` about $0.006 a minute of
 audio, `tts-1` about $15 per million characters — a spoken sentence is a

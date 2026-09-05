@@ -29,7 +29,8 @@ import time
 import urllib.error
 import urllib.request
 
-USAGE = {"input_tokens": 0, "output_tokens": 0, "calls": 0, "provider": None}
+USAGE = {"input_tokens": 0, "output_tokens": 0, "cache_reads": 0,
+         "cache_writes": 0, "calls": 0, "provider": None}
 
 ANTHROPIC_MODEL = os.environ.get("JARVIS_MODEL", "claude-opus-5")
 EFFORT = os.environ.get("JARVIS_EFFORT", "low")
@@ -135,6 +136,29 @@ def resolve() -> str:
     return "none"
 
 
+# Published Anthropic rates per million tokens, at time of writing. Cached
+# input reads at a tenth of the input rate. These drive the on-screen
+# estimate only; check the pricing page before trusting them.
+RATES = {
+    "claude-opus-5":   {"in": 5.00, "out": 25.00},
+    "claude-sonnet-5": {"in": 3.00, "out": 15.00},
+    "claude-haiku-4-5": {"in": 1.00, "out": 5.00},
+}
+
+
+def estimated_cost() -> dict:
+    r = RATES.get(ANTHROPIC_MODEL)
+    if not r or USAGE["provider"] != "anthropic":
+        return {"usd": 0.0, "known": False}
+    usd = (USAGE["input_tokens"] * r["in"]
+           + USAGE["cache_reads"] * r["in"] * 0.1
+           + USAGE["cache_writes"] * r["in"] * 1.25
+           + USAGE["output_tokens"] * r["out"]) / 1_000_000
+    per = usd / USAGE["calls"] if USAGE["calls"] else 0
+    return {"usd": round(usd, 4), "per_turn": round(per, 4), "known": True,
+            "calls": USAGE["calls"], "cached_tokens": USAGE["cache_reads"]}
+
+
 def status() -> dict:
     p = probe()
     who = resolve()
@@ -157,7 +181,7 @@ def status() -> dict:
             "warn": warn, "free": who == "ollama",
             "auto": os.environ.get("JARVIS_LLM", "auto").strip().lower() == "auto",
             "tools": p["ollama"]["tools"] if who == "ollama" else True,
-            "providers": p, "usage": USAGE}
+            "providers": p, "usage": USAGE, "cost": estimated_cost()}
 
 
 # ------------------------------------------------------------------ anthropic
@@ -198,16 +222,26 @@ def _to_anthropic(history: list[dict]) -> list[dict]:
 def _chat_anthropic(history: list[dict], system: str, tool_schema: list[dict]) -> dict:
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
     t0 = time.time()
+    # The tools and the system prompt are identical on every turn and are
+    # most of the input, so they are cached. Render order is tools ->
+    # system -> messages, so one breakpoint at the end of system covers
+    # both. Without this, every question re-pays for ~3k tokens of identity
+    # and tool definitions it has already sent.
+    tools_cached = [dict(t) for t in tool_schema]
+    if tools_cached:
+        tools_cached[-1]["cache_control"] = {"type": "ephemeral"}
+
     out = _post(base + "/v1/messages", {
         "model": ANTHROPIC_MODEL,
         # Generous, because adaptive thinking spends from this budget too.
         # Answers stay short because the prompt says so, not because the
         # response gets cut off mid-sentence.
         "max_tokens": 4096,
-        "system": system,
+        "system": [{"type": "text", "text": system,
+                    "cache_control": {"type": "ephemeral"}}],
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": EFFORT},
-        "tools": tool_schema,
+        "tools": tools_cached,
         "messages": _to_anthropic(history),
     }, {"x-api-key": _anthropic_key(),
         "anthropic-version": "2023-06-01",
@@ -217,6 +251,8 @@ def _chat_anthropic(history: list[dict], system: str, tool_schema: list[dict]) -
     u = out.get("usage", {})
     USAGE["input_tokens"] += u.get("input_tokens", 0)
     USAGE["output_tokens"] += u.get("output_tokens", 0)
+    USAGE["cache_reads"] += u.get("cache_read_input_tokens", 0)
+    USAGE["cache_writes"] += u.get("cache_creation_input_tokens", 0)
     USAGE["calls"] += 1
     USAGE["provider"] = "anthropic"
 
@@ -225,7 +261,11 @@ def _chat_anthropic(history: list[dict], system: str, tool_schema: list[dict]) -
     calls = [{"id": b["id"], "name": b["name"], "input": b.get("input", {})}
              for b in out.get("content", []) if b.get("type") == "tool_use"]
     return {"text": text, "tool_calls": calls, "provider": "anthropic",
-            "model": ANTHROPIC_MODEL, "ms": {"total": wall}}
+            "model": ANTHROPIC_MODEL,
+            "ms": {"total": wall,
+                   "prompt_tokens": u.get("input_tokens", 0),
+                   "output_tokens": u.get("output_tokens", 0),
+                   "cached": u.get("cache_read_input_tokens", 0)}}
 
 
 # ------------------------------------------------------------------ ollama
