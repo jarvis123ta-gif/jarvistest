@@ -154,6 +154,19 @@ connected and the answer is *"Shopify is not connected, Sir. I have no
 orders, products or margins, and I will not invent any."* That is the whole
 answer, by design.
 
+## When something is wrong
+
+```bash
+python3 agent/doctor.py
+```
+
+One command, one report: Python, your folders, what got indexed, the model,
+both halves of voice, which browser was found and where it looked, desktop
+permissions, the kill switch, and whether the server is up. It changes
+nothing — no files written, no browser launched, no input synthesised.
+
+Paste that output anywhere you need help and the answer is usually in it.
+
 ## Setup
 
 ```bash
