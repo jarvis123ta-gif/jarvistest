@@ -145,11 +145,23 @@ row(OK if m else WARN, "whisper model", m or "no ggml-*.bin found")
 
 section("connectors")
 import connectors                                           # noqa: E402
-for c in connectors.status_all():
-    row(OK if c["connected"] else WARN, c["label"].lower(),
-        (f"{c['mode']} — {', '.join(c['provides'])}" if c["connected"]
-         else c["reason"][:110]))
-if any(not c["connected"] for c in connectors.status_all()):
+all_conn = connectors.status_all()
+for c in all_conn:
+    if c["mode"] == "demo":
+        row(WARN if not c.get("credentials") else OK, c["label"].lower(),
+            "credentials ready — masked by demo mode"
+            if c.get("credentials") else "demo fixtures, no credentials yet")
+    else:
+        row(OK if c["connected"] else WARN, c["label"].lower(),
+            f"live — {', '.join(c['provides'])}" if c["connected"]
+            else c["reason"][:110])
+
+ready = [c["label"] for c in all_conn if c.get("credentials")]
+if ready and data.demo_mode():
+    row(WARN, "!! demo mode",
+        f"{len(ready)} connector(s) are authorised and being ignored. "
+        "Set JARVIS_DEMO=0 in .env to use the real ones.")
+if any(not c.get("credentials") for c in all_conn if c["key"] != "shopify"):
     row(OK, "connect google", "python3 agent/setup_google.py  "
                               "(Gmail, Calendar, Classroom, Drive, YouTube)")
 

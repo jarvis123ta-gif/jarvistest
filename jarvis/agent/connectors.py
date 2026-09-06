@@ -79,15 +79,23 @@ class Connector:
         return False, "not implemented"
 
     def status(self) -> dict:
+        # Whether credentials EXIST is reported separately from whether demo
+        # mode is currently masking them. Otherwise someone who has just
+        # finished an OAuth flow has no way to tell whether it worked.
+        has_creds, why = self.configured()
         if _cfg.demo_mode():
             return {"key": self.key, "label": self.label, "domain": self.domain,
                     "connected": True, "mode": "demo", "readonly": True,
-                    "reason": "demo fixtures — these numbers are invented",
+                    "credentials": has_creds,
+                    "reason": ("demo fixtures — these numbers are invented"
+                               + ("; real credentials are ready and will be "
+                                  "used the moment JARVIS_DEMO=0"
+                                  if has_creds else "")),
                     "provides": self.provides}
-        ok, why = self.configured()
         return {"key": self.key, "label": self.label, "domain": self.domain,
-                "connected": ok, "mode": "live", "readonly": True,
-                "reason": "" if ok else why, "provides": self.provides}
+                "connected": has_creds, "mode": "live", "readonly": True,
+                "credentials": has_creds,
+                "reason": "" if has_creds else why, "provides": self.provides}
 
     def unavailable(self, what: str) -> dict:
         """The honest empty answer. Never a plausible-looking one."""
