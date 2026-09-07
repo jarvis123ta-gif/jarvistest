@@ -119,11 +119,18 @@ check("disarmed still reports why", "guardrail test" in control.status()["reason
 control.arm()
 check("re-arming works", control.armed())
 
-before = len(control.recent(200))
-control.log("test", "a probe action", {"n": 1}, origin=control.PRINCIPAL)
+# Assert that the entry ARRIVES, not that the list grew — recent() caps at
+# a window, so on a machine that has been used a while the length stops
+# changing and a growth assertion silently becomes untestable.
+import uuid as _uuid
+marker = f"probe {_uuid.uuid4().hex[:8]}"
+control.log("test", marker, {"n": 1}, origin=control.PRINCIPAL)
 after = control.recent(200)
-check("every action lands in the log", len(after) > before and
-      after[0]["action"] == "a probe action" and after[0]["origin"] == "principal")
+check("every action lands in the log",
+      bool(after) and after[0]["action"] == marker
+      and after[0]["origin"] == "principal")
+check("the log is newest-first",
+      len(after) < 2 or after[0]["at"] >= after[1]["at"])
 check("the log records origin, not just what happened",
       all("origin" in e for e in after[:5]))
 
