@@ -157,6 +157,7 @@ def main() -> None:
     if not current.get("GEMINI_API_KEY") and not current.get("ANTHROPIC_API_KEY"):
         print("\n  A cloud model is much faster than one on your laptop.")
         print("  Free key, no card: https://aistudio.google.com/apikey")
+        print("  (Whatever that page shows is the key — the prefix varies.)")
         key = ask("\n  Paste a Gemini key (or Enter to keep using Ollama): ")
         if key:
             updates["GEMINI_API_KEY"] = key

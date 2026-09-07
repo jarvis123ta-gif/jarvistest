@@ -439,6 +439,10 @@ one answered.
 | --- | --- | --- | --- |
 | **Claude** (`ANTHROPIC_API_KEY`) | fast | ~0.6c a turn | prompts go to Anthropic |
 | **Gemini** (`GEMINI_API_KEY`) | fast | free tier | prompts go to Google |
+
+Gemini keys come in more than one shape — older ones start `AIza`, newer
+ones `AQ.`. Both are valid and nothing validates the prefix; whatever the
+AI Studio key page shows you is the key.
 | **Ollama** (nothing) | depends on the model | free | nothing leaves the machine |
 
 Gemini picks its own model from what your key can actually reach, preferring
