@@ -157,6 +157,11 @@ for c in all_conn:
             f"live — {', '.join(c['provides'])}" if c["connected"]
             else c["reason"][:110])
 
+feeds = next((c for c in all_conn if c["key"] == "feeds"), None)
+if feeds and feeds.get("feeds"):
+    row(OK, "calendar feeds",
+        f"{feeds['feeds']} feed(s): {', '.join(feeds['domains'])}")
+
 ready = [c["label"] for c in all_conn if c.get("credentials")]
 if ready and data.demo_mode():
     row(WARN, "!! demo mode",

@@ -155,6 +155,25 @@ the guardrail test asserts that every request to a user service is a GET. The
 single POST in the codebase is Google's OAuth token refresh, which mints a
 read token and touches no data.
 
+### Calendar feeds — the easy way in
+
+Before wrestling with OAuth: **Schoology, Canvas, PowerSchool and Google
+Calendar all publish a secret `.ics` link.** One URL in `JARVIS_SCHOOL_ICS`
+and every due date arrives — no consent screen, no client secret, no Cloud
+Console, and it works for portals nobody has written an API client for.
+
+| Portal | Where the link is |
+| --- | --- |
+| Schoology | Calendar → iCal Feed (or Settings → iCal) |
+| Canvas | Calendar → Calendar Feed, bottom right |
+| Google Calendar | Settings → your calendar → Secret address in iCal format |
+
+Feeds land in `deadlines` and `plan_day` next to everything else, sorted by
+urgency. Where a feed and Classroom describe the same assignment, Classroom
+wins — it knows whether you actually turned it in, and a feed does not.
+
+Treat the URLs as credentials; anyone holding one can read that calendar.
+
 ### Connecting Google
 
 One command does the whole flow — Gmail, Calendar, Classroom, Drive and

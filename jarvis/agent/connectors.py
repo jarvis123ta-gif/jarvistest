@@ -31,6 +31,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import data as _cfg
+import ics as _ics
 
 # Read-only scopes. If a token carries more than this, that is the operator's
 # doing, not ours — we still only ever call the endpoints below.
@@ -406,6 +407,61 @@ class YouTubeConnector(_Google):
                     "spoken": "YouTube did not answer, Sir."}
 
 
+class FeedsConnector(Connector):
+    """Calendar feeds — the no-OAuth route into a school portal.
+
+    Schoology, Canvas, PowerSchool and Google Calendar all publish a secret
+    .ics URL. One link gets assignment due dates in with no consent screen,
+    no client secret and no Cloud Console, and it works for portals nobody
+    has written a client for.
+    """
+
+    key = "feeds"
+    label = "Calendar feeds"
+    domain = "all"
+    provides = ["events", "deadlines"]
+
+    def configured(self) -> tuple[bool, str]:
+        if _cfg.calendar_feeds():
+            return True, ""
+        return False, ("No calendar feeds. This is the easiest way to get "
+                       "school deadlines in: find the iCal/ICS link in "
+                       "Schoology, Canvas or Google Calendar and put it in "
+                       "JARVIS_SCHOOL_ICS. No OAuth needed.")
+
+    def status(self) -> dict:
+        feeds = _cfg.calendar_feeds()
+        base = super().status()
+        base["feeds"] = len(feeds)
+        base["domains"] = sorted({f["domain"] for f in feeds})
+        # A feed is real data even in demo mode; it is the user's own URL.
+        if _cfg.demo_mode() and not feeds:
+            base["connected"] = False
+            base["reason"] = self.configured()[1]
+        elif feeds:
+            base["connected"] = True
+            base["credentials"] = True
+            base["mode"] = "live"
+            base["reason"] = ""
+        return base
+
+    def events(self, back_days: int = 14, forward_days: int = 60) -> dict:
+        feeds = _cfg.calendar_feeds()
+        if not feeds:
+            return self.unavailable("calendar feeds")
+        out, problems = [], []
+        for f in feeds:
+            res = _ics.load(f["url"])
+            if not res.get("ok"):
+                problems.append({"var": f["var"], "reason": res["reason"]})
+                continue
+            for e in _ics.upcoming(res["events"], back_days, forward_days):
+                out.append({**e, "domain": f["domain"], "source": "feed"})
+        out.sort(key=lambda e: (e["date"], e["time"] or ""))
+        return {"ok": True, "source": "ics", "events": out,
+                "feeds": len(feeds), "problems": problems}
+
+
 # ------------------------------------------------------------------ shopify
 
 class ShopifyConnector(Connector):
@@ -488,6 +544,7 @@ REGISTRY: dict[str, Connector] = {
     "drive": DriveConnector(),
     "classroom": ClassroomConnector(),
     "youtube": YouTubeConnector(),
+    "feeds": FeedsConnector(),
     "shopify": ShopifyConnector(),
 }
 

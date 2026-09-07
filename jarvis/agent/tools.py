@@ -335,8 +335,35 @@ def _classroom_rows() -> list[dict]:
     return rows
 
 
+def _feed_rows() -> list[dict]:
+    """Assignments and events from any .ics feed, in the deadline shape."""
+    res = connectors.get("feeds").events()
+    if not res.get("ok"):
+        return []
+    rows = []
+    for e in res.get("events", []):
+        d = _days_until(e.get("date"))
+        if d is None or d > 45:
+            continue
+        rows.append({
+            "what": e["title"], "type": "assignment", "domain": e["domain"],
+            "due": e["date"], "days": d, "when": _due_phrase(d),
+            "status": "open", "file": "calendar feed",
+            "id": e.get("uid", e["date"] + e["title"][:20]),
+            "course": None, "weight": None, "source": "feed",
+            "link": e.get("url"), "at": e.get("time"),
+        })
+    return rows
+
+
 def _deadline_rows(vault) -> list[dict]:
     rows = _classroom_rows()
+    # Feeds come second so Classroom wins on a title clash: it knows whether
+    # the work was actually turned in, and a feed does not.
+    for r in _feed_rows():
+        if not any(x["what"].lower() == r["what"].lower()
+                   and x["due"] == r["due"] for x in rows):
+            rows.append(r)
     seen = {(r["what"].lower(), r["due"]) for r in rows}
     for n in vault.notes.values():
         meta = n["meta"]
@@ -388,6 +415,8 @@ def deadlines(vault, domain: str | None = None, within_days: int = 14) -> dict:
                  "window_days": within_days, "domain": domain,
                  "from_classroom": sum(1 for r in rows
                                        if r.get("source") == "classroom"),
+                 "from_feeds": sum(1 for r in rows
+                                   if r.get("source") == "feed"),
                  "ordering": "soonest first; school breaks ties",
                  "note": "Dates are Central Time, read from your files and "
                          "Google Classroom. Nothing here is inferred."},

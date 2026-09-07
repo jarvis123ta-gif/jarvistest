@@ -120,6 +120,24 @@ def roots_status() -> dict:
 # are read-only scopes. Nothing in this project has a send or write scope.
 # ------------------------------------------------------------------
 
+def calendar_feeds() -> list[dict]:
+    """Secret .ics URLs — Schoology, Canvas, PowerSchool, Google Calendar.
+
+    Each is tagged with the world it belongs to, so a Schoology feed lands
+    in school and a store calendar in business. Treat the URLs as
+    credentials: anyone holding one can read that calendar.
+    """
+    out = []
+    for dom, var in (("school", "JARVIS_SCHOOL_ICS"),
+                     ("business", "JARVIS_BUSINESS_ICS"),
+                     ("deca", "JARVIS_DECA_ICS")):
+        for url in (os.environ.get(var, "") or "").split(","):
+            url = url.strip()
+            if url:
+                out.append({"domain": dom, "url": url, "var": var})
+    return out
+
+
 def connector_config() -> dict:
     e = os.environ.get
     return {

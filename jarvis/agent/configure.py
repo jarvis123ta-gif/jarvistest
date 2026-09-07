@@ -163,6 +163,37 @@ def main() -> None:
             updates["GEMINI_API_KEY"] = key
             updates["JARVIS_LLM"] = "auto"
 
+    # Calendar feeds: the no-OAuth route into Schoology, Canvas, PowerSchool.
+    if not current.get("JARVIS_SCHOOL_ICS"):
+        print("\n  SCHOOL PORTAL")
+        print("  Schoology, Canvas and PowerSchool all publish a secret")
+        print("  calendar link. One URL and JARVIS sees every due date —")
+        print("  no login, no consent screen.")
+        print("\n    Schoology : Calendar > iCal Feed (or Settings > iCal)")
+        print("    Canvas    : Calendar > Calendar Feed (bottom right)")
+        print("    Google    : Settings > your calendar > Secret address in")
+        print("                iCal format")
+        ics = ask("\n  Paste the .ics URL (or Enter to skip): ")
+        if ics:
+            updates["JARVIS_SCHOOL_ICS"] = ics
+    if not current.get("JARVIS_DECA_ICS"):
+        d = ask("  A separate DECA calendar link? (or Enter to skip): ")
+        if d:
+            updates["JARVIS_DECA_ICS"] = d
+
+    if not current.get("SHOPIFY_ACCESS_TOKEN"):
+        print("\n  SHOPIFY")
+        print("  Admin > Settings > Apps and sales channels > Develop apps")
+        print("  > Create an app > Configure Admin API scopes.")
+        print("  Tick ONLY read_orders, read_products, read_customers.")
+        print("  Install it, then reveal the Admin API access token.")
+        shop = ask("\n  Your store (e.g. my-store.myshopify.com, Enter to skip): ")
+        if shop:
+            tok = ask("  Admin API access token: ")
+            if tok:
+                updates["SHOPIFY_SHOP"] = shop
+                updates["SHOPIFY_ACCESS_TOKEN"] = tok
+
     updates["JARVIS_DEMO"] = "0"
 
     print("\n  About to write to .env:\n")
