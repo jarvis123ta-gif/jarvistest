@@ -15,3 +15,7 @@ chrome-profile/
 
 # The action log is a record of what was done on this machine.
 memory/actions.log
+
+# The watcher's baseline: a snapshot of real deadlines, orders and mail.
+# Runtime state, and private. Never commit it.
+memory/watch.json
