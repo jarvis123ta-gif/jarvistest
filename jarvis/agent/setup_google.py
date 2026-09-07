@@ -33,7 +33,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import data                                                 # noqa: E402
 
-ENV = data.ROOT / ".env"
+import envfile                                              # noqa: E402
+
+ENV = envfile.ENV
 REDIRECT_PORT = int(os.environ.get("JARVIS_OAUTH_PORT", "8721"))
 REDIRECT = f"http://localhost:{REDIRECT_PORT}/"
 
@@ -98,42 +100,8 @@ def _ssl_ctx() -> ssl.SSLContext:
     return ctx
 
 
-def _read_env() -> dict:
-    out = {}
-    if ENV.exists():
-        for line in ENV.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                out[k.strip()] = v.strip()
-    return out
-
-
-def _write_env(updates: dict) -> None:
-    """Update keys in place, preserving comments and everything else."""
-    if not ENV.exists():
-        sample = data.ROOT / ".env.example"
-        ENV.write_text(sample.read_text(encoding="utf-8") if sample.exists() else "",
-                       encoding="utf-8")
-    lines = ENV.read_text(encoding="utf-8").splitlines()
-    remaining = dict(updates)
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key = stripped.split("=", 1)[0].strip()
-        if key in remaining:
-            lines[i] = f"{key}={remaining.pop(key)}"
-    if remaining:
-        lines.append("")
-        lines.append("# Written by setup_google.py")
-        for k, v in remaining.items():
-            lines.append(f"{k}={v}")
-    ENV.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    try:
-        os.chmod(ENV, 0o600)
-    except OSError:
-        pass
+_read_env = envfile.read
+_write_env = envfile.write
 
 
 class _Catcher(http.server.BaseHTTPRequestHandler):

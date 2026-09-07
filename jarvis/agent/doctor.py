@@ -76,8 +76,9 @@ note = tz.fallback_note()
 row(WARN if note else OK, "clock", note or "system timezone database in use")
 
 if data.demo_mode():
-    row(WARN, "your folders", "still on demo data — set JARVIS_DEMO=0 and the "
-                              "three root variables to index your own files")
+    row(WARN, "your folders", "still on demo data — run "
+                              "`python3 agent/configure.py` and it will find "
+                              "your folders and set this up for you")
 else:
     for dom, paths in st["by_domain"].items():
         if not paths:

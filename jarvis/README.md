@@ -197,6 +197,18 @@ Paste that output anywhere you need help and the answer is usually in it.
 ## Setup
 
 ```bash
+python3 agent/configure.py
+```
+
+It searches Documents, Desktop, iCloud Drive and the usual cloud folders
+for anything that looks like school, business or DECA work, shows you what
+it found with a count of readable files in each, takes a Gemini key if you
+have one, switches off demo mode and then indexes everything so you can see
+it worked. Your `.env` keeps its comments and every value it does not touch.
+
+Prefer to do it by hand:
+
+```bash
 cp .env.example .env && chmod 600 .env
 ```
 
